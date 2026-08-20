@@ -1,0 +1,15 @@
+# Rust
+/target
+Cargo.lock
+
+# Node
+web/node_modules
+web/.next
+web/.env*
+!web/.env.example
+
+# OS
+.DS_Store
+
+# Superpowers SDD scratch
+.superpowers/
