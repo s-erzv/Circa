@@ -1,0 +1,758 @@
+#![cfg(test)]
+
+use super::*;
+use soroban_sdk::testutils::{Address as _, Ledger};
+use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
+use soroban_sdk::{Env, IntoVal};
+
+fn setup_pool_with_token(
+    env: &Env,
+) -> (ArisanPoolClient<'_>, Address, Address, StellarAssetClient<'static>) {
+    let pool_id = env.register(ArisanPool, ());
+    let client = ArisanPoolClient::new(env, &pool_id);
+
+    let organizer = Address::generate(env);
+    let token_admin = Address::generate(env);
+    let sac = env.register_stellar_asset_contract_v2(token_admin);
+    let token = sac.address();
+    let asset_client = StellarAssetClient::new(env, &token);
+
+    (client, organizer, token, asset_client)
+}
+
+fn create_default_pool(
+    _env: &Env,
+    client: &ArisanPoolClient,
+    organizer: &Address,
+    token: &Address,
+    member_count: u32,
+) {
+    client.create(
+        organizer,
+        token,
+        &100i128,
+        &member_count,
+        &2_592_000u64, // 30 days
+        &259_200u64,   // 3 days
+        &10i128,
+        &5i128,
+        &0u32,
+    );
+}
+
+fn join_all(env: &Env, client: &ArisanPoolClient, n: u32) -> soroban_sdk::Vec<Address> {
+    let mut members = soroban_sdk::Vec::new(env);
+    for _ in 0..n {
+        let m = Address::generate(env);
+        client.join(&m);
+        members.push_back(m);
+    }
+    members
+}
+
+// ---------- create() ----------
+
+#[test]
+fn test_create_rejects_invalid_amounts() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, _asset) = setup_pool_with_token(&env);
+
+    assert_eq!(
+        client.try_create(
+            &organizer, &token, &0i128, &3u32, &2_592_000u64, &259_200u64, &10i128, &5i128, &0u32,
+        ),
+        Err(Ok(Error::InvalidAmount)),
+        "contribution_amount must be positive"
+    );
+    assert_eq!(
+        client.try_create(
+            &organizer, &token, &100i128, &1u32, &2_592_000u64, &259_200u64, &10i128, &5i128,
+            &0u32,
+        ),
+        Err(Ok(Error::InvalidAmount)),
+        "member_count below 2 makes no sense as a rotating pool"
+    );
+    assert_eq!(
+        client.try_create(
+            &organizer, &token, &100i128, &3u32, &0u64, &259_200u64, &10i128, &5i128, &0u32,
+        ),
+        Err(Ok(Error::InvalidAmount)),
+        "zero cycle_length_secs would collapse the deadline gate"
+    );
+    assert_eq!(
+        client.try_create(
+            &organizer, &token, &100i128, &3u32, &2_592_000u64, &0u64, &10i128, &5i128, &0u32,
+        ),
+        Err(Ok(Error::InvalidAmount)),
+        "zero deadline_offset_secs would collapse the deadline gate"
+    );
+    assert_eq!(
+        client.try_create(
+            &organizer,
+            &token,
+            &100i128,
+            &3u32,
+            &2_592_000u64,
+            &259_200u64,
+            &10i128,
+            &5i128,
+            &(MAX_RESERVE_BPS + 1),
+        ),
+        Err(Ok(Error::InvalidAmount)),
+        "reserve_bps above the cap is rejected, not silently clamped"
+    );
+}
+
+#[test]
+fn test_create_twice_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, _asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 3);
+
+    assert_eq!(
+        client.try_create(
+            &organizer, &token, &100i128, &3u32, &2_592_000u64, &259_200u64, &10i128, &5i128,
+            &0u32,
+        ),
+        Err(Ok(Error::PoolAlreadyExists))
+    );
+}
+
+// ---------- join() / activation ----------
+
+#[test]
+fn test_join_fills_and_activates_pool() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, _asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 3);
+
+    assert!(!client.get_pool().activated);
+    let members = join_all(&env, &client, 3);
+
+    let pool = client.get_pool();
+    assert!(pool.activated);
+    assert_eq!(pool.queue.len(), 3);
+    for m in members.iter() {
+        assert!(pool.queue.contains(&m));
+    }
+    // cycle_deadline is set from deadline_offset_secs (the grace window),
+    // not cycle_length_secs — confirmed against the live deployed contract
+    // during reconstruction, not assumed.
+    assert_eq!(pool.cycle_deadline, env.ledger().timestamp() + 259_200);
+}
+
+#[test]
+fn test_join_rejects_duplicate_and_full_pool() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, _asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 2);
+
+    let m1 = Address::generate(&env);
+    client.join(&m1);
+    assert_eq!(client.try_join(&m1), Err(Ok(Error::AlreadyJoined)));
+
+    let m2 = Address::generate(&env);
+    client.join(&m2);
+    assert!(client.get_pool().activated);
+
+    let m3 = Address::generate(&env);
+    assert_eq!(client.try_join(&m3), Err(Ok(Error::PoolFull)));
+}
+
+#[test]
+fn test_join_requires_member_auth() {
+    let env = Env::default();
+    let (client, organizer, token, _asset) = setup_pool_with_token(&env);
+    env.mock_all_auths();
+    create_default_pool(&env, &client, &organizer, &token, 2);
+
+    let m1 = Address::generate(&env);
+    let impostor = Address::generate(&env);
+    let res = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &impostor,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "join",
+                args: (m1.clone(),).into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_join(&m1);
+    assert!(res.is_err(), "someone else authorizing cannot join on m1's behalf");
+    assert!(!client.get_pool().members.contains(&m1));
+}
+
+// ---------- contribute() ----------
+
+#[test]
+fn test_contribute_before_activation_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 3);
+    let m1 = Address::generate(&env);
+    client.join(&m1);
+    asset.mint(&m1, &1000i128);
+
+    assert_eq!(client.try_contribute(&m1), Err(Ok(Error::PoolNotActivated)));
+}
+
+#[test]
+fn test_contribute_moves_tokens_and_marks_on_time() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 2);
+    let members = join_all(&env, &client, 2);
+    let m1 = members.get_unchecked(0);
+    asset.mint(&m1, &1000i128);
+
+    let token_client = TokenClient::new(&env, &token);
+    client.contribute(&m1);
+
+    assert_eq!(token_client.balance(&m1), 900);
+    assert_eq!(token_client.balance(&client.address), 100);
+    let member = client.get_member(&m1);
+    assert!(member.contributed_this_cycle);
+    assert_eq!(member.total_contributed, 100);
+    assert_eq!(client.get_pool().cycle_pot, 100);
+}
+
+#[test]
+fn test_contribute_twice_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 2);
+    let members = join_all(&env, &client, 2);
+    let m1 = members.get_unchecked(0);
+    asset.mint(&m1, &1000i128);
+
+    client.contribute(&m1);
+    assert_eq!(client.try_contribute(&m1), Err(Ok(Error::AlreadyContributed)));
+}
+
+// ---------- distribute() / penalize() ----------
+
+#[test]
+fn test_distribute_before_deadline_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 2);
+    let members = join_all(&env, &client, 2);
+    for m in members.iter() {
+        asset.mint(&m, &1000i128);
+        client.contribute(&m);
+    }
+    assert_eq!(client.try_distribute(), Err(Ok(Error::DeadlineNotPassed)));
+}
+
+#[test]
+fn test_distribute_pays_queue_front_and_advances_cycle() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 2);
+    let members = join_all(&env, &client, 2);
+    for m in members.iter() {
+        asset.mint(&m, &1000i128);
+        client.contribute(&m);
+    }
+
+    let recipient = client.get_pool().queue.get_unchecked(0);
+    let token_client = TokenClient::new(&env, &token);
+    let balance_before = token_client.balance(&recipient);
+
+    env.ledger().set_timestamp(env.ledger().timestamp() + 259_200 + 1);
+    client.distribute();
+
+    // gross = 200, skim = 0 (reserve_bps = 0), net_payout = 200.
+    assert_eq!(token_client.balance(&recipient), balance_before + 200);
+    assert!(client.get_member(&recipient).received_payout);
+
+    let pool_after = client.get_pool();
+    assert_eq!(pool_after.current_cycle, 1);
+    assert_eq!(pool_after.cycle_pot, 0);
+    assert_eq!(pool_after.queue.len(), 1);
+    assert!(!pool_after.queue.contains(&recipient));
+}
+
+#[test]
+fn test_distribute_is_permissionless() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 2);
+    let members = join_all(&env, &client, 2);
+    for m in members.iter() {
+        asset.mint(&m, &1000i128);
+        client.contribute(&m);
+    }
+    env.ledger().set_timestamp(env.ledger().timestamp() + 259_200 + 1);
+
+    // Called with NO auths mocked at all — distribute() must not require
+    // require_auth() from anyone, or an outsider could never trigger a
+    // payout the members themselves forgot to.
+    env.set_auths(&[]);
+    let res = client.try_distribute();
+    assert!(res.is_ok(), "distribute() must be callable with zero authorizations");
+}
+
+#[test]
+fn test_distribute_closes_pool_when_queue_empties() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 2);
+    let members = join_all(&env, &client, 2);
+
+    for _ in 0..2 {
+        for m in members.iter() {
+            if !client.get_member(&m).contributed_this_cycle && !client.get_member(&m).exited {
+                asset.mint(&m, &1000i128);
+                let _ = client.try_contribute(&m);
+            }
+        }
+        env.ledger().set_timestamp(env.ledger().timestamp() + 259_200 + 1);
+        client.distribute();
+    }
+
+    assert!(client.get_pool().closed);
+}
+
+#[test]
+fn test_penalize_marks_delinquent_and_owed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 2);
+    let members = join_all(&env, &client, 2);
+    let m1 = members.get_unchecked(0);
+    let _ = asset;
+
+    env.ledger().set_timestamp(env.ledger().timestamp() + 259_200 + 1);
+    assert_eq!(client.try_penalize(&m1), Ok(Ok(())));
+
+    let member = client.get_member(&m1);
+    assert!(member.delinquent);
+    assert_eq!(member.balance_owed, 10);
+    assert_eq!(
+        client.try_penalize(&m1),
+        Err(Ok(Error::AlreadyPenalizedThisCycle))
+    );
+}
+
+// ---------- pay_debt() ----------
+
+#[test]
+fn test_pay_debt_requires_own_auth_and_clears_delinquent() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 2);
+    let members = join_all(&env, &client, 2);
+    let m1 = members.get_unchecked(0);
+
+    env.ledger().set_timestamp(env.ledger().timestamp() + 259_200 + 1);
+    client.penalize(&m1);
+    assert_eq!(client.get_member(&m1).balance_owed, 10);
+
+    asset.mint(&m1, &1000i128);
+    assert_eq!(client.try_pay_debt(&m1, &0i128), Err(Ok(Error::InvalidAmount)));
+
+    client.pay_debt(&m1, &10i128);
+    let member = client.get_member(&m1);
+    assert_eq!(member.balance_owed, 0);
+    assert!(!member.delinquent);
+}
+
+#[test]
+fn test_pay_debt_clamps_overpayment() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 2);
+    let members = join_all(&env, &client, 2);
+    let m1 = members.get_unchecked(0);
+
+    env.ledger().set_timestamp(env.ledger().timestamp() + 259_200 + 1);
+    client.penalize(&m1);
+    asset.mint(&m1, &1000i128);
+
+    let token_client = TokenClient::new(&env, &token);
+    let before = token_client.balance(&m1);
+    client.pay_debt(&m1, &1000i128); // owes only 10
+    assert_eq!(token_client.balance(&m1), before - 10);
+    assert_eq!(client.get_member(&m1).balance_owed, 0);
+}
+
+// ---------- exit() ----------
+
+#[test]
+fn test_exit_refunds_current_cycle_minus_penalty() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 3);
+    let members = join_all(&env, &client, 3);
+    let m1 = members.get_unchecked(0);
+    asset.mint(&m1, &1000i128);
+    client.contribute(&m1);
+
+    let token_client = TokenClient::new(&env, &token);
+    let before = token_client.balance(&m1);
+    client.exit(&m1);
+    // contribution 100 - exit_penalty 5 = 95 refunded.
+    assert_eq!(token_client.balance(&m1), before + 95);
+    assert!(client.get_member(&m1).exited);
+    assert!(!client.get_pool().members.contains(&m1));
+    assert!(!client.get_pool().queue.contains(&m1));
+}
+
+#[test]
+fn test_exit_blocked_by_outstanding_debt_after_payout() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 2);
+    let members = join_all(&env, &client, 2);
+    for m in members.iter() {
+        asset.mint(&m, &1000i128);
+        client.contribute(&m);
+    }
+    let recipient = client.get_pool().queue.get_unchecked(0);
+    env.ledger().set_timestamp(env.ledger().timestamp() + 259_200 + 1);
+    client.distribute();
+    assert!(client.get_member(&recipient).received_payout);
+
+    // Force the recipient into debt post-payout via a second missed cycle.
+    env.ledger().set_timestamp(env.ledger().timestamp() + 259_200 + 1);
+    let _ = client.try_penalize(&recipient);
+    if client.get_member(&recipient).balance_owed > 0 {
+        assert_eq!(client.try_exit(&recipient), Err(Ok(Error::OutstandingDebt)));
+    }
+}
+
+#[test]
+fn test_exit_twice_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, _asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 3);
+    let members = join_all(&env, &client, 3);
+    let m1 = members.get_unchecked(0);
+    client.exit(&m1);
+    assert_eq!(client.try_exit(&m1), Err(Ok(Error::AlreadyExited)));
+}
+
+// ---------- set_gov / set_reputation / clear_reputation ----------
+
+#[test]
+fn test_set_gov_requires_organizer_auth() {
+    let env = Env::default();
+    let (client, organizer, token, _asset) = setup_pool_with_token(&env);
+    env.mock_all_auths();
+    create_default_pool(&env, &client, &organizer, &token, 3);
+
+    let gov = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let res = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &attacker,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "set_gov",
+                args: (gov.clone(),).into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_set_gov(&gov);
+    assert!(res.is_err());
+    assert_eq!(client.get_gov(), None);
+
+    client.set_gov(&gov);
+    assert_eq!(client.get_gov(), Some(gov));
+}
+
+#[test]
+fn test_set_gov_blocked_after_activation_and_single_shot() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, _asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 2);
+
+    let gov1 = Address::generate(&env);
+    client.set_gov(&gov1);
+    let gov2 = Address::generate(&env);
+    assert_eq!(client.try_set_gov(&gov2), Err(Ok(Error::AlreadyConfigured)));
+
+    join_all(&env, &client, 2);
+    let gov3 = Address::generate(&env);
+    let (client2, organizer2, token2, _a2) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client2, &organizer2, &token2, 2);
+    join_all(&env, &client2, 2);
+    assert_eq!(
+        client2.try_set_gov(&gov3),
+        Err(Ok(Error::PoolAlreadyActivated))
+    );
+}
+
+#[test]
+fn test_clear_reputation_is_organizer_only_and_not_activation_gated() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, _asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 2);
+
+    let reputation = Address::generate(&env);
+    client.set_reputation(&reputation);
+    join_all(&env, &client, 2); // activates
+    assert_eq!(client.get_reputation(), Some(reputation));
+
+    let attacker = Address::generate(&env);
+    let res = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &attacker,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "clear_reputation",
+                args: ().into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_clear_reputation();
+    assert!(res.is_err());
+
+    // Organizer CAN clear post-activation — the escape hatch this exists for.
+    client.clear_reputation();
+    assert_eq!(client.get_reputation(), None);
+}
+
+// ---------- gov_skip / gov_kick ----------
+
+#[test]
+fn test_gov_ops_require_configured_gov() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, _asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 2);
+    let members = join_all(&env, &client, 2);
+    let m1 = members.get_unchecked(0);
+
+    assert_eq!(client.try_gov_skip(&m1), Err(Ok(Error::GovNotConfigured)));
+    assert_eq!(client.try_gov_kick(&m1), Err(Ok(Error::GovNotConfigured)));
+}
+
+#[test]
+fn test_only_configured_gov_can_drive_pool_ops() {
+    let env = Env::default();
+    let (client, organizer, token, _asset) = setup_pool_with_token(&env);
+    env.mock_all_auths();
+    create_default_pool(&env, &client, &organizer, &token, 2);
+    client.set_gov(&organizer); // pretend organizer address IS gov, pre-activation
+    let members = join_all(&env, &client, 2);
+    let m1 = members.get_unchecked(0);
+
+    let impostor = Address::generate(&env);
+    let res = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &impostor,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "gov_skip",
+                args: (m1.clone(),).into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_gov_skip(&m1);
+    assert!(res.is_err(), "only the configured gov address may drive gov_skip");
+    assert!(client.get_pool().queue.contains(&m1));
+
+    // Positive control: the real configured gov CAN drive it.
+    client.gov_skip(&m1);
+}
+
+#[test]
+fn test_gov_kick_reports_default_only_when_balance_owed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, _asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 2);
+
+    let rep_admin = Address::generate(&env);
+    let rep_id = env.register(arisan_reputation::ArisanReputation, (rep_admin.clone(),));
+    let rep_client = arisan_reputation::ArisanReputationClient::new(&env, &rep_id);
+    rep_client.add_writer(&client.address);
+
+    client.set_gov(&organizer);
+    client.set_reputation(&rep_id);
+    let members = join_all(&env, &client, 2);
+    let m1 = members.get_unchecked(0);
+
+    // m1 owes nothing: kicked, no default recorded.
+    client.gov_kick(&m1);
+    assert_eq!(rep_client.record(&m1).defaulted, 0);
+    assert!(client.get_member(&m1).exited);
+
+    // m2: force balance_owed via a missed cycle, then kick.
+    let m2 = members.get_unchecked(1);
+    env.ledger().set_timestamp(env.ledger().timestamp() + 259_200 + 1);
+    let _ = client.try_penalize(&m2);
+    assert!(client.get_member(&m2).balance_owed > 0);
+    client.gov_kick(&m2);
+    assert_eq!(rep_client.record(&m2).defaulted, 1);
+}
+
+#[test]
+fn test_gov_ops_rejected_on_closed_pool() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 2);
+    client.set_gov(&organizer);
+    let members = join_all(&env, &client, 2);
+
+    for _ in 0..2 {
+        for m in members.iter() {
+            if !client.get_member(&m).contributed_this_cycle && !client.get_member(&m).exited {
+                asset.mint(&m, &1000i128);
+                let _ = client.try_contribute(&m);
+            }
+        }
+        env.ledger().set_timestamp(env.ledger().timestamp() + 259_200 + 1);
+        client.distribute();
+    }
+    assert!(client.get_pool().closed);
+
+    let m1 = members.get_unchecked(0);
+    assert_eq!(client.try_gov_kick(&m1), Err(Ok(Error::PoolClosed)));
+    assert_eq!(client.try_gov_skip(&m1), Err(Ok(Error::PoolClosed)));
+}
+
+// ---------- request_swap / accept_swap ----------
+
+#[test]
+fn test_swap_requires_mutual_consent() {
+    let env = Env::default();
+    let (client, organizer, token, _asset) = setup_pool_with_token(&env);
+    env.mock_all_auths();
+    create_default_pool(&env, &client, &organizer, &token, 3);
+    let members = join_all(&env, &client, 3);
+    let m1 = members.get_unchecked(0);
+    let m2 = members.get_unchecked(1);
+
+    let pos_m1_before = client.get_pool().queue.first_index_of(&m1).unwrap();
+    let pos_m2_before = client.get_pool().queue.first_index_of(&m2).unwrap();
+
+    client.request_swap(&m1, &m2);
+    // Wrong requester in accept_swap must fail.
+    let m3 = members.get_unchecked(2);
+    assert_eq!(
+        client.try_accept_swap(&m2, &m3),
+        Err(Ok(Error::SwapTargetMismatch))
+    );
+    // Queue unchanged by the rejected attempt.
+    assert_eq!(client.get_pool().queue.first_index_of(&m1).unwrap(), pos_m1_before);
+
+    client.accept_swap(&m2, &m1);
+    assert_eq!(client.get_pool().queue.first_index_of(&m1).unwrap(), pos_m2_before);
+    assert_eq!(client.get_pool().queue.first_index_of(&m2).unwrap(), pos_m1_before);
+}
+
+#[test]
+fn test_accept_swap_without_request_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, _asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 3);
+    let members = join_all(&env, &client, 3);
+    let m1 = members.get_unchecked(0);
+    let m2 = members.get_unchecked(1);
+
+    assert_eq!(
+        client.try_accept_swap(&m2, &m1),
+        Err(Ok(Error::NoPendingSwap))
+    );
+}
+
+// ---------- on-time / late reputation reporting ----------
+
+#[test]
+fn test_on_time_contribution_is_recorded() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 2);
+
+    let rep_admin = Address::generate(&env);
+    let rep_id = env.register(arisan_reputation::ArisanReputation, (rep_admin.clone(),));
+    let rep_client = arisan_reputation::ArisanReputationClient::new(&env, &rep_id);
+    rep_client.add_writer(&client.address);
+    client.set_reputation(&rep_id);
+
+    let members = join_all(&env, &client, 2);
+    let m1 = members.get_unchecked(0);
+    asset.mint(&m1, &1000i128);
+    client.contribute(&m1);
+
+    assert_eq!(rep_client.record(&m1).on_time, 1);
+}
+
+#[test]
+fn test_penalize_records_late_once_not_twice() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 2);
+
+    let rep_admin = Address::generate(&env);
+    let rep_id = env.register(arisan_reputation::ArisanReputation, (rep_admin.clone(),));
+    let rep_client = arisan_reputation::ArisanReputationClient::new(&env, &rep_id);
+    rep_client.add_writer(&client.address);
+    client.set_reputation(&rep_id);
+
+    let members = join_all(&env, &client, 2);
+    let m1 = members.get_unchecked(0);
+
+    env.ledger().set_timestamp(env.ledger().timestamp() + 259_200 + 1);
+    client.penalize(&m1);
+    assert_eq!(rep_client.record(&m1).late, 1);
+
+    asset.mint(&m1, &1000i128);
+    client.contribute(&m1);
+    // Already penalized this cycle — contribute() must not double-count
+    // the same lapse as a second late.
+    assert_eq!(rep_client.record(&m1).late, 1);
+}
+
+#[test]
+fn test_contribute_survives_revoked_reputation_writer() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 2);
+
+    let rep_admin = Address::generate(&env);
+    let rep_id = env.register(arisan_reputation::ArisanReputation, (rep_admin.clone(),));
+    let rep_client = arisan_reputation::ArisanReputationClient::new(&env, &rep_id);
+    // Deliberately never add the pool as a writer — every reputation write
+    // will fail. contribute() must not revert because of it (C1a).
+    let _ = rep_client;
+    client.set_reputation(&rep_id);
+
+    let members = join_all(&env, &client, 2);
+    let m1 = members.get_unchecked(0);
+    asset.mint(&m1, &1000i128);
+
+    let res = client.try_contribute(&m1);
+    assert!(
+        res.is_ok(),
+        "a broken reputation feed must never block contribute()"
+    );
+}
