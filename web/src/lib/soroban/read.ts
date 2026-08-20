@@ -1,0 +1,95 @@
+import { Address, Contract, Keypair, Networks, TransactionBuilder, rpc, scValToNative } from '@stellar/stellar-sdk';
+
+const RPC_URL = process.env.STELLAR_RPC_URL || 'https://soroban-testnet.stellar.org';
+const NETWORK_PASSPHRASE = Networks.TESTNET;
+
+/**
+ * Calls a read-only contract method and returns its decoded result.
+ *
+ * A Soroban view call needs no signature and moves nothing, so it never
+ * goes through the relay: it's just a simulation, thrown away rather than
+ * submitted. The sponsor account is only used as a throwaway transaction
+ * source to make the simulation well-formed — nothing about its identity
+ * matters or is asserted on-chain.
+ */
+export async function readContract<T>(
+  contractId: string,
+  method: string,
+  args: Parameters<Contract['call']>[1][] = [],
+): Promise<T> {
+  const secret = process.env.STELLAR_SPONSOR_SECRET;
+  if (!secret) throw new Error('STELLAR_SPONSOR_SECRET is not configured');
+
+  const rpcServer = new rpc.Server(RPC_URL);
+  const sponsorKp = Keypair.fromSecret(secret);
+  const sourceAccount = await rpcServer.getAccount(sponsorKp.publicKey());
+
+  const contract = new Contract(contractId);
+  const tx = new TransactionBuilder(sourceAccount, {
+    fee: '100',
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(contract.call(method, ...args))
+    .setTimeout(30)
+    .build();
+
+  const simulated = await rpcServer.simulateTransaction(tx);
+  if (rpc.Api.isSimulationError(simulated)) {
+    throw new Error(`read ${method} failed: ${simulated.error}`);
+  }
+  if (!simulated.result) {
+    throw new Error(`read ${method} returned no result`);
+  }
+  return scValToNative(simulated.result.retval) as T;
+}
+
+export async function isPoolActivated(poolId: string): Promise<boolean> {
+  return readContract<boolean>(poolId, 'is_activated');
+}
+
+export async function listPoolMembers(poolId: string): Promise<string[]> {
+  return readContract<string[]>(poolId, 'list_members');
+}
+
+/** `scValToNative` already decodes nested Address fields in `Pool` to plain
+ *  G.../C... strings, so `queue` needs no further conversion. */
+export async function getPoolQueue(poolId: string): Promise<string[]> {
+  const pool = await readContract<{ queue: string[] }>(poolId, 'get_pool');
+  return pool.queue;
+}
+
+export type OnChainPool = {
+  organizer: string;
+  token: string;
+  contribution_amount: bigint;
+  member_count: number;
+  cycle_length_secs: bigint;
+  deadline_offset_secs: bigint;
+  members: string[];
+  queue: string[];
+  activated: boolean;
+  current_cycle: number;
+  cycle_deadline: bigint;
+  cycle_pot: bigint;
+  reserve_balance: bigint;
+  closed: boolean;
+};
+
+export async function getPool(poolId: string): Promise<OnChainPool> {
+  return readContract<OnChainPool>(poolId, 'get_pool');
+}
+
+export type OnChainMember = {
+  address: string;
+  total_contributed: bigint;
+  contributed_this_cycle: boolean;
+  penalized_this_cycle: boolean;
+  received_payout: boolean;
+  balance_owed: bigint;
+  delinquent: boolean;
+  exited: boolean;
+};
+
+export async function getMember(poolId: string, member: string): Promise<OnChainMember> {
+  return readContract<OnChainMember>(poolId, 'get_member', [new Address(member).toScVal()]);
+}

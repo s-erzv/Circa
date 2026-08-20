@@ -1,0 +1,48 @@
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ]
+    }
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    // Orphaned Prisma scaffolding: it imports `prisma/config` (not
+    // installed) and points at `prisma/schema.prisma` (does not exist),
+    // while the app talks to Postgres through @supabase/supabase-js. It
+    // fails the build's type check, so it is excluded rather than deleted —
+    // harmless to keep if Prisma is adopted later, at which point installing
+    // the dependency and removing this line is all it needs.
+    "prisma.config.ts"
+  ]
+}
