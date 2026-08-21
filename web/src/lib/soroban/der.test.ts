@@ -67,7 +67,43 @@ describe('derSignatureToRaw', () => {
       /SEQUENCE/,
     );
   });
+
+  test('flips a high-S signature to its canonical low-S form', () => {
+    // n = secp256r1 order. Encode s = n - 1 (unambiguously high: greater
+    // than n/2), which the contract's verifier rejects unless flipped to
+    // n - (n - 1) = 1.
+    const ORDER = BigInt(
+      '0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551',
+    );
+    const highS = bigIntToBytes32(ORDER - BigInt(1));
+    const r = new Uint8Array(32).fill(0x02);
+
+    const der = encodeDerSequence(r, highS);
+    const raw = derSignatureToRaw(der);
+
+    const expectedLowS = bigIntToBytes32(BigInt(1));
+    expect(Array.from(raw.slice(32))).toEqual(Array.from(expectedLowS));
+  });
+
+  test('leaves an already low-S signature untouched', () => {
+    const r = new Uint8Array(32).fill(0x02);
+    const s = new Uint8Array(32).fill(0x01); // tiny — well under n/2
+
+    const der = encodeDerSequence(r, s);
+    const raw = derSignatureToRaw(der);
+
+    expect(Array.from(raw.slice(32))).toEqual(Array.from(s));
+  });
 });
+
+function bigIntToBytes32(value: bigint): Uint8Array {
+  const bytes = new Uint8Array(32);
+  for (let i = 31; i >= 0; i--) {
+    bytes[i] = Number(value & BigInt(0xff));
+    value >>= BigInt(8);
+  }
+  return bytes;
+}
 
 /** Hand-rolled minimal DER SEQUENCE{INTEGER r, INTEGER s} encoder, used only
  *  to build synthetic test vectors for edge cases real signatures won't
