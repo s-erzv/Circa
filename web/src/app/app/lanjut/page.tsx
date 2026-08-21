@@ -30,7 +30,7 @@ const continuingLabel: Record<ActionKind, string> = {
 };
 
 const doneLabel: Record<ActionKind, string> = {
-  confirm: 'Arisan ini udah jadi ✅',
+  confirm: 'Arisan ini udah jadi, kamu juga udah otomatis gabung ✅',
   join: 'Kamu resmi gabung ✅',
   setor: 'Setoran berhasil ✅',
   jadwal: 'Dompet kamu udah jadi ✅',
@@ -213,6 +213,27 @@ function LanjutInner() {
         });
         await signAndSubmit(prepared, status.credentialId);
         await rawFetch(`/api/pools/${next.poolId}/confirm-created`, { method: 'POST' });
+
+        // Same organizer auto-join as the in-Telegram confirm flow (see
+        // pool/[id]/page.tsx's onConfirm) — a failure here doesn't undo the
+        // contract creation, so it's logged, not thrown.
+        try {
+          const freshPool = await rawFetch<{ contractId: string | null }>(`/api/pools/${next.poolId}`);
+          if (freshPool.contractId) {
+            const joinPrepared = await rawFetch<PreparedRelay>('/api/tx/prepare', {
+              method: 'POST',
+              body: JSON.stringify({
+                kind: 'pool_join',
+                poolId: freshPool.contractId,
+                member: status.walletAddress,
+              }),
+            });
+            await signAndSubmit(joinPrepared, status.credentialId);
+            await rawFetch(`/api/pools/${next.poolId}/confirm-joined`, { method: 'POST' });
+          }
+        } catch (joinError) {
+          console.error('auto-join after confirm failed:', joinError);
+        }
       }
 
       setResultLabel(doneLabel[next.kind]);

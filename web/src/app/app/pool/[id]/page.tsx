@@ -36,6 +36,7 @@ export default function PoolConfirmPage({ params }: { params: Promise<{ id: stri
   const [phase, setPhase] = useState<Phase>('loading');
   const [pool, setPool] = useState<PoolInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [autoJoined, setAutoJoined] = useState(false);
 
   useEffect(() => {
     initTelegramView();
@@ -99,8 +100,10 @@ export default function PoolConfirmPage({ params }: { params: Promise<{ id: stri
   async function onConfirm() {
     setPhase('confirming');
     setError(null);
+
+    let status: WalletStatus;
     try {
-      const status = await apiFetch<WalletStatus>('/api/wallet/status');
+      status = await apiFetch<WalletStatus>('/api/wallet/status');
       if (!status.hasWallet || !status.credentialId) {
         throw new Error('Dompet belum siap.');
       }
@@ -133,8 +136,6 @@ export default function PoolConfirmPage({ params }: { params: Promise<{ id: stri
       });
 
       await apiFetch(`/api/pools/${id}/confirm-created`, { method: 'POST' });
-      setPhase('done');
-      load();
     } catch (e) {
       // The wallet already exists here, so this is the *signing* ceremony
       // (`publickey-credentials-get`) hitting the same iframe restriction
@@ -150,7 +151,69 @@ export default function PoolConfirmPage({ params }: { params: Promise<{ id: stri
       }
       setError((e as Error).message);
       setPhase('ready');
+      return;
     }
+
+    // The organizer already proved wallet + intent by signing create() —
+    // join them into their own arisan right away instead of routing them
+    // through the group's "Gabung" flow like every other member has to.
+    try {
+      const freshPool = await apiFetch<PoolInfo>(`/api/pools/${id}`);
+      if (freshPool.contractId && status.walletAddress && status.credentialId) {
+        const { xdr } = await import('@stellar/stellar-sdk');
+        const { signSorobanAuthEntry } = await import('@/lib/soroban/passkey-auth');
+
+        const joinPrepared = await apiFetch<{
+          relayId: string;
+          authEntryXdr: string;
+          validUntilLedgerSeq: number;
+          networkPassphrase: string;
+        }>('/api/tx/prepare', {
+          method: 'POST',
+          body: JSON.stringify({
+            kind: 'pool_join',
+            poolId: freshPool.contractId,
+            member: status.walletAddress,
+          }),
+        });
+        const unsignedJoinEntry = xdr.SorobanAuthorizationEntry.fromXDR(
+          joinPrepared.authEntryXdr,
+          'base64',
+        );
+        const signedJoinEntry = await signSorobanAuthEntry(unsignedJoinEntry, {
+          validUntilLedgerSeq: joinPrepared.validUntilLedgerSeq,
+          networkPassphrase: joinPrepared.networkPassphrase,
+          credentialId: status.credentialId,
+        });
+        await apiFetch('/api/tx/submit', {
+          method: 'POST',
+          body: JSON.stringify({
+            relayId: joinPrepared.relayId,
+            signedAuthEntryXdr: signedJoinEntry.toXDR('base64'),
+          }),
+        });
+        await apiFetch(`/api/pools/${id}/confirm-joined`, { method: 'POST' });
+        setAutoJoined(true);
+      }
+    } catch (e) {
+      if (isWebAuthnBlockedError(e)) {
+        try {
+          await handOffToSystemBrowser(`join_${id}`);
+        } catch (handoffError) {
+          setError((handoffError as Error).message);
+        }
+        setPhase('done');
+        load();
+        return;
+      }
+      // The contract itself is already made and confirmed regardless — a
+      // failure here just means the organizer joins later like anyone
+      // else, via the group's "Gabung" button. Not worth blocking on.
+      console.error('auto-join after confirm failed:', e);
+    }
+
+    setPhase('done');
+    load();
   }
 
   return (
@@ -218,7 +281,9 @@ export default function PoolConfirmPage({ params }: { params: Promise<{ id: stri
           <p className="text-sm">
             {pool?.status === 'draft'
               ? 'Belum dikonfirmasi.'
-              : 'Arisan ini udah jadi ✅ — balik ke grup buat ikutan.'}
+              : autoJoined
+                ? 'Arisan ini udah jadi, dan kamu udah otomatis gabung ✅'
+                : 'Arisan ini udah jadi ✅ — balik ke grup buat ikutan.'}
           </p>
           {pool && ['active', 'closed'].includes(pool.status) && (
             <a
