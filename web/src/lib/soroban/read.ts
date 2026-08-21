@@ -93,3 +93,13 @@ export type OnChainMember = {
 export async function getMember(poolId: string, member: string): Promise<OnChainMember> {
   return readContract<OnChainMember>(poolId, 'get_member', [new Address(member).toScVal()]);
 }
+
+/**
+ * A SEP-41 token's own `balance` — used for the IDRT held directly in a
+ * wallet, separate from whatever's already inside a pool contract. The app
+ * mints/moves IDRT as raw integer Rupiah (see mint.ts), so this returns the
+ * same unscaled units, not 7-decimal stroops.
+ */
+export async function getTokenBalance(tokenAddress: string, owner: string): Promise<bigint> {
+  return readContract<bigint>(tokenAddress, 'balance', [new Address(owner).toScVal()]);
+}

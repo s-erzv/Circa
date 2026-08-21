@@ -104,6 +104,9 @@ export default function PoolSetorPage({ params }: { params: Promise<{ id: string
         status.credentialId,
       );
 
+      await apiFetch(`/api/pools/${id}/confirm-contributed`, { method: 'POST' }).catch((err) =>
+        console.error('confirm-contributed failed:', err),
+      );
       setPhase('done');
     } catch (e) {
       // The wallet already exists here, so this is the *signing* ceremony

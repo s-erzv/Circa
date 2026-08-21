@@ -206,6 +206,8 @@ function LanjutInner() {
 
         if (next.kind === 'join') {
           await rawFetch(`/api/pools/${next.poolId}/confirm-joined`, { method: 'POST' });
+        } else {
+          await rawFetch(`/api/pools/${next.poolId}/confirm-contributed`, { method: 'POST' });
         }
       } else if (next.kind === 'confirm') {
         const prepared = await rawFetch<PreparedRelay>(`/api/pools/${next.poolId}/deploy`, {

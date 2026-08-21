@@ -1,6 +1,13 @@
 import { Bot, InlineKeyboard } from 'grammy';
 import { supabase } from './supabase';
-import { createDraftPool, isInterested, listInterestedCount, markInterested } from './pools';
+import {
+  createDraftPool,
+  getLivePoolForChat,
+  isInterested,
+  listInterestedCount,
+  markInterested,
+} from './pools';
+import { getMember, getPool, getTokenBalance, listPoolMembers } from './soroban/read';
 import OpenAI from 'openai';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -409,6 +416,85 @@ bot.command('mulai', async (ctx) => {
     'Oke, mau bikin arisan kayak gimana? Kasih tau nama, jumlah anggota, ' +
       'dan nominal setorannya ya. Contoh: "Arisan Kantor, 8 orang, setoran 100rb".',
   );
+});
+
+/**
+ * Own wallet balance — private-chat only, since a balance is exactly the
+ * kind of thing that shouldn't be pasted into a shared group.
+ */
+bot.command('saldo', async (ctx) => {
+  const telegramId = ctx.from?.id.toString();
+  if (!telegramId) return;
+  if (ctx.chat.type !== 'private') {
+    await ctx.reply('Ketik /saldo di chat pribadi ya, biar saldomu nggak keliatan di grup.');
+    return;
+  }
+
+  const { data: userRow } = await supabase
+    .from('users')
+    .select('wallet_address')
+    .eq('telegram_id', telegramId)
+    .maybeSingle();
+
+  if (!userRow?.wallet_address) {
+    await ctx.reply('Kamu belum punya dompet. Buka Mini App-nya dulu ya.');
+    return;
+  }
+
+  const tokenAddress = process.env.IDRT_TOKEN_ADDRESS;
+  if (!tokenAddress) {
+    await ctx.reply('Waduh, lagi ada masalah di server. Coba lagi bentar ya 🙏');
+    return;
+  }
+
+  try {
+    const balance = await getTokenBalance(tokenAddress, userRow.wallet_address);
+    await ctx.reply(`💰 Saldo dompetmu: Rp${balance.toLocaleString('id-ID')}`);
+  } catch (err) {
+    console.error('failed to read wallet balance:', err);
+    await ctx.reply('Gagal ngecek saldo. Coba lagi bentar ya 🙏');
+  }
+});
+
+/**
+ * The group's arisan pool balance — group-only, and deliberately so: unlike
+ * a personal wallet, "how much has this arisan collected" is exactly the
+ * shared, everyone-can-see-it information a real arisan already runs on.
+ */
+bot.command('saldopool', async (ctx) => {
+  if (ctx.chat.type === 'private') {
+    await ctx.reply('Ketik /saldopool di grup arisan kamu ya.');
+    return;
+  }
+
+  const chatId = ctx.chat.id.toString();
+  const pool = await getLivePoolForChat(chatId);
+  if (!pool || !pool.contract_id) {
+    await ctx.reply('Belum ada arisan yang jalan di grup ini.');
+    return;
+  }
+
+  try {
+    const [onChain, members] = await Promise.all([
+      getPool(pool.contract_id),
+      listPoolMembers(pool.contract_id),
+    ]);
+
+    const memberStates = await Promise.all(
+      members.map((address) => getMember(pool.contract_id as string, address)),
+    );
+    const paidThisCycle = memberStates.filter((m) => m.contributed_this_cycle).length;
+
+    await ctx.reply(
+      `💰 Saldo "${pool.name}":\n` +
+        `• Terkumpul siklus ini: Rp${onChain.cycle_pot.toLocaleString('id-ID')}\n` +
+        `• Cadangan (reserve): Rp${onChain.reserve_balance.toLocaleString('id-ID')}\n` +
+        `• Udah setor siklus ini: ${paidThisCycle}/${members.length} anggota`,
+    );
+  } catch (err) {
+    console.error('failed to read pool balance:', err);
+    await ctx.reply('Gagal ngecek saldo pool. Coba lagi bentar ya 🙏');
+  }
 });
 
 bot.on('message:text', async (ctx) => {

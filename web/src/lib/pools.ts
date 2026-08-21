@@ -70,6 +70,23 @@ export async function createDraftPool(
   return data;
 }
 
+/**
+ * The one non-closed pool for a group chat — `pools_one_live_per_chat`
+ * (migration 004) guarantees there's at most one, so "the arisan in this
+ * group" is a well-defined thing to ask for.
+ */
+export async function getLivePoolForChat(chatId: string): Promise<PoolRow | null> {
+  const { data } = await supabase
+    .from('pools')
+    .select('*')
+    .eq('telegram_chat_id', chatId)
+    .neq('status', 'closed')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data;
+}
+
 export async function getPool(id: string): Promise<PoolRow | null> {
   const { data } = await supabase.from('pools').select('*').eq('id', id).maybeSingle();
   return data;
