@@ -144,19 +144,32 @@ function LanjutInner() {
     }
     if (redeemed.current) return;
     redeemed.current = true;
-    fetch('/api/wallet/handoff/redeem', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ token }),
-    })
-      .then(async (r) => {
+    (async () => {
+      try {
+        const r = await fetch('/api/wallet/handoff/redeem', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ token }),
+        });
         if (!r.ok) throw new Error((await r.json()).error ?? 'gagal');
-        setPhase('ready');
-      })
-      .catch((e) => {
-        setError(e.message);
+
+        // A wallet may already exist — this handoff can be reached not just
+        // to CREATE one, but because the sign step of an already-existing
+        // wallet's join/setor/confirm also hit the same iframe restriction
+        // (`publickey-credentials-get`, not `-create`). Skip straight past
+        // "Bikin dompet" in that case; there's no wallet left to create.
+        const status = await rawFetch<{ hasWallet: boolean }>('/api/wallet/status');
+        if (status.hasWallet && action && action.kind !== 'jadwal') {
+          await continueAction(action);
+        } else {
+          setPhase('ready');
+        }
+      } catch (e) {
+        setError((e as Error).message);
         setPhase('error');
-      });
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   /**

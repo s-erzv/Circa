@@ -106,6 +106,18 @@ export default function PoolSetorPage({ params }: { params: Promise<{ id: string
 
       setPhase('done');
     } catch (e) {
+      // The wallet already exists here, so this is the *signing* ceremony
+      // (`publickey-credentials-get`) hitting the same iframe restriction
+      // `onCreateWallet` guards against for the *creation* one — same fix.
+      if (isWebAuthnBlockedError(e)) {
+        try {
+          await handOffToSystemBrowser(`setor_${id}`);
+        } catch (handoffError) {
+          setError((handoffError as Error).message);
+        }
+        setPhase('ready');
+        return;
+      }
       setError((e as Error).message);
       setPhase('ready');
     }

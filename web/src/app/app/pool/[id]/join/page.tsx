@@ -109,6 +109,18 @@ export default function PoolJoinPage({ params }: { params: Promise<{ id: string 
       await apiFetch(`/api/pools/${id}/confirm-joined`, { method: 'POST' });
       setPhase('done');
     } catch (e) {
+      // The wallet already exists here, so this is the *signing* ceremony
+      // (`publickey-credentials-get`) hitting the same iframe restriction
+      // `onCreateWallet` guards against for the *creation* one — same fix.
+      if (isWebAuthnBlockedError(e)) {
+        try {
+          await handOffToSystemBrowser(`join_${id}`);
+        } catch (handoffError) {
+          setError((handoffError as Error).message);
+        }
+        setPhase('ready');
+        return;
+      }
       setError((e as Error).message);
       setPhase('ready');
     }
