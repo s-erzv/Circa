@@ -29,10 +29,12 @@ fn setup(
     let token_admin = Address::generate(env);
     let sac = env.register_stellar_asset_contract_v2(token_admin);
     let token = sac.address();
+    let gateway = Address::generate(env);
 
     pool.create(
         &organizer,
         &token,
+        &gateway,
         &50i128,
         &n,
         &2_592_000u64,
@@ -74,10 +76,12 @@ fn setup_funded(
     let sac = env.register_stellar_asset_contract_v2(token_admin);
     let token = sac.address();
     let asset = soroban_sdk::token::StellarAssetClient::new(env, &token);
+    let gateway = Address::generate(env);
 
     pool.create(
         &organizer,
         &token,
+        &gateway,
         &50i128,
         &n,
         &2_592_000u64,
@@ -114,8 +118,10 @@ fn test_propose_rejected_before_pool_activation() {
     let token_admin = Address::generate(&env);
     let sac = env.register_stellar_asset_contract_v2(token_admin);
     let token = sac.address();
+    let gateway = Address::generate(&env);
     pool2.create(
-        &organizer, &token, &50i128, &3u32, &2_592_000u64, &259_200u64, &10i128, &5i128, &0u32,
+        &organizer, &token, &gateway, &50i128, &3u32, &2_592_000u64, &259_200u64, &10i128,
+        &5i128, &0u32,
     );
     let gov_id = env.register(ArisanGov, (pool_id.clone(), WINDOW));
     let gov2 = ArisanGovClient::new(&env, &gov_id);
@@ -433,8 +439,10 @@ fn test_banked_votes_cannot_be_revived_by_exiting_yes_voters_post_activation() {
     let token_admin = Address::generate(&env);
     let sac = env.register_stellar_asset_contract_v2(token_admin);
     let token = sac.address();
+    let gateway = Address::generate(&env);
     pool.create(
-        &organizer, &token, &50i128, &8u32, &2_592_000u64, &259_200u64, &10i128, &5i128, &0u32,
+        &organizer, &token, &gateway, &50i128, &8u32, &2_592_000u64, &259_200u64, &10i128,
+        &5i128, &0u32,
     );
     let gov_id = env.register(ArisanGov, (pool_id.clone(), WINDOW));
     let gov = ArisanGovClient::new(&env, &gov_id);

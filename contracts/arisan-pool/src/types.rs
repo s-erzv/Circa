@@ -5,6 +5,11 @@ use soroban_sdk::{contracterror, contracttype, Address, Vec};
 pub struct Pool {
     pub organizer: Address,
     pub token: Address,
+    /// The one address allowed to call `contribute_via_gateway` — set once,
+    /// at construction, by whoever deploys the pool (never organizer- or
+    /// gov-settable). See `cycle::contribute_via_gateway`'s doc comment for
+    /// why that immutability is load-bearing.
+    pub gateway: Address,
     pub contribution_amount: i128,
     pub member_count: u32,
     pub cycle_length_secs: u64,

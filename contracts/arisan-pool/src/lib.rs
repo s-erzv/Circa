@@ -29,6 +29,7 @@ impl ArisanPool {
         env: Env,
         organizer: Address,
         token: Address,
+        gateway: Address,
         contribution_amount: i128,
         member_count: u32,
         cycle_length_secs: u64,
@@ -66,6 +67,7 @@ impl ArisanPool {
         let pool = Pool {
             organizer,
             token,
+            gateway,
             contribution_amount,
             member_count,
             cycle_length_secs,
@@ -96,6 +98,12 @@ impl ArisanPool {
 
     pub fn contribute(env: Env, member: Address) -> Result<(), Error> {
         cycle::contribute(&env, member)
+    }
+
+    /// Records a contribution paid through the QRIS gateway instead of
+    /// signed directly by the member — see `cycle::contribute_via_gateway`.
+    pub fn contribute_via_gateway(env: Env, member: Address) -> Result<(), Error> {
+        cycle::contribute_via_gateway(&env, member)
     }
 
     pub fn distribute(env: Env) -> Result<(), Error> {

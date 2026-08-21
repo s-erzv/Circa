@@ -20,16 +20,22 @@ fn setup_pool_with_token(
     (client, organizer, token, asset_client)
 }
 
+/// Returns the freshly generated `gateway` address the pool was created
+/// with, for the handful of tests that need to sign as it
+/// (`contribute_via_gateway`) — every other call site just ignores the
+/// return value, same as it ignored nothing before this existed.
 fn create_default_pool(
-    _env: &Env,
+    env: &Env,
     client: &ArisanPoolClient,
     organizer: &Address,
     token: &Address,
     member_count: u32,
-) {
+) -> Address {
+    let gateway = Address::generate(env);
     client.create(
         organizer,
         token,
+        &gateway,
         &100i128,
         &member_count,
         &2_592_000u64, // 30 days
@@ -38,6 +44,7 @@ fn create_default_pool(
         &5i128,
         &0u32,
     );
+    gateway
 }
 
 fn join_all(env: &Env, client: &ArisanPoolClient, n: u32) -> soroban_sdk::Vec<Address> {
@@ -57,32 +64,36 @@ fn test_create_rejects_invalid_amounts() {
     let env = Env::default();
     env.mock_all_auths();
     let (client, organizer, token, _asset) = setup_pool_with_token(&env);
+    let gateway = Address::generate(&env);
 
     assert_eq!(
         client.try_create(
-            &organizer, &token, &0i128, &3u32, &2_592_000u64, &259_200u64, &10i128, &5i128, &0u32,
+            &organizer, &token, &gateway, &0i128, &3u32, &2_592_000u64, &259_200u64, &10i128,
+            &5i128, &0u32,
         ),
         Err(Ok(Error::InvalidAmount)),
         "contribution_amount must be positive"
     );
     assert_eq!(
         client.try_create(
-            &organizer, &token, &100i128, &1u32, &2_592_000u64, &259_200u64, &10i128, &5i128,
-            &0u32,
+            &organizer, &token, &gateway, &100i128, &1u32, &2_592_000u64, &259_200u64, &10i128,
+            &5i128, &0u32,
         ),
         Err(Ok(Error::InvalidAmount)),
         "member_count below 2 makes no sense as a rotating pool"
     );
     assert_eq!(
         client.try_create(
-            &organizer, &token, &100i128, &3u32, &0u64, &259_200u64, &10i128, &5i128, &0u32,
+            &organizer, &token, &gateway, &100i128, &3u32, &0u64, &259_200u64, &10i128, &5i128,
+            &0u32,
         ),
         Err(Ok(Error::InvalidAmount)),
         "zero cycle_length_secs would collapse the deadline gate"
     );
     assert_eq!(
         client.try_create(
-            &organizer, &token, &100i128, &3u32, &2_592_000u64, &0u64, &10i128, &5i128, &0u32,
+            &organizer, &token, &gateway, &100i128, &3u32, &2_592_000u64, &0u64, &10i128, &5i128,
+            &0u32,
         ),
         Err(Ok(Error::InvalidAmount)),
         "zero deadline_offset_secs would collapse the deadline gate"
@@ -91,6 +102,7 @@ fn test_create_rejects_invalid_amounts() {
         client.try_create(
             &organizer,
             &token,
+            &gateway,
             &100i128,
             &3u32,
             &2_592_000u64,
@@ -109,12 +121,12 @@ fn test_create_twice_rejected() {
     let env = Env::default();
     env.mock_all_auths();
     let (client, organizer, token, _asset) = setup_pool_with_token(&env);
-    create_default_pool(&env, &client, &organizer, &token, 3);
+    let gateway = create_default_pool(&env, &client, &organizer, &token, 3);
 
     assert_eq!(
         client.try_create(
-            &organizer, &token, &100i128, &3u32, &2_592_000u64, &259_200u64, &10i128, &5i128,
-            &0u32,
+            &organizer, &token, &gateway, &100i128, &3u32, &2_592_000u64, &259_200u64, &10i128,
+            &5i128, &0u32,
         ),
         Err(Ok(Error::PoolAlreadyExists))
     );
@@ -235,6 +247,107 @@ fn test_contribute_twice_rejected() {
 
     client.contribute(&m1);
     assert_eq!(client.try_contribute(&m1), Err(Ok(Error::AlreadyContributed)));
+}
+
+// ---------- contribute_via_gateway() ----------
+
+#[test]
+fn test_contribute_via_gateway_moves_tokens_from_gateway_not_member() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    let gateway = create_default_pool(&env, &client, &organizer, &token, 2);
+    let members = join_all(&env, &client, 2);
+    let m1 = members.get_unchecked(0);
+    asset.mint(&gateway, &1000i128);
+
+    let token_client = TokenClient::new(&env, &token);
+    client.contribute_via_gateway(&m1);
+
+    // The member's own wallet is never touched — this is exactly the point:
+    // a member with zero balance can still be credited, because the QRIS
+    // payment already moved real value into the gateway's account, not
+    // theirs.
+    assert_eq!(token_client.balance(&m1), 0);
+    assert_eq!(token_client.balance(&gateway), 900);
+    assert_eq!(token_client.balance(&client.address), 100);
+    let member = client.get_member(&m1);
+    assert!(member.contributed_this_cycle);
+    assert_eq!(member.total_contributed, 100);
+    assert_eq!(client.get_pool().cycle_pot, 100);
+}
+
+#[test]
+fn test_contribute_via_gateway_rejects_wrong_authorizer() {
+    let env = Env::default();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    env.mock_all_auths();
+    let gateway = create_default_pool(&env, &client, &organizer, &token, 2);
+    let members = join_all(&env, &client, 2);
+    let m1 = members.get_unchecked(0);
+    asset.mint(&gateway, &1000i128);
+
+    let impostor = Address::generate(&env);
+    let res = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &impostor,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "contribute_via_gateway",
+                args: (m1.clone(),).into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_contribute_via_gateway(&m1);
+    assert!(res.is_err(), "an address other than the configured gateway cannot credit a contribution");
+    assert!(!client.get_member(&m1).contributed_this_cycle);
+}
+
+#[test]
+fn test_contribute_via_gateway_rejects_member_self_authorizing() {
+    // The member authorizing their OWN gateway-credit (instead of the
+    // gateway itself) must also fail — this is the specific case that
+    // would let a member forge a "someone paid for me" credit for free,
+    // without any real transfer happening, since a member always CAN
+    // authorize actions concerning themselves.
+    let env = Env::default();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    env.mock_all_auths();
+    let gateway = create_default_pool(&env, &client, &organizer, &token, 2);
+    let members = join_all(&env, &client, 2);
+    let m1 = members.get_unchecked(0);
+    asset.mint(&gateway, &1000i128);
+
+    let res = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &m1,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "contribute_via_gateway",
+                args: (m1.clone(),).into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_contribute_via_gateway(&m1);
+    assert!(res.is_err(), "a member cannot self-authorize their own gateway credit");
+    assert!(!client.get_member(&m1).contributed_this_cycle);
+}
+
+#[test]
+fn test_contribute_via_gateway_twice_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    let gateway = create_default_pool(&env, &client, &organizer, &token, 2);
+    let members = join_all(&env, &client, 2);
+    let m1 = members.get_unchecked(0);
+    asset.mint(&gateway, &1000i128);
+
+    client.contribute_via_gateway(&m1);
+    assert_eq!(
+        client.try_contribute_via_gateway(&m1),
+        Err(Ok(Error::AlreadyContributed))
+    );
 }
 
 // ---------- distribute() / penalize() ----------

@@ -3,8 +3,13 @@ use crate::storage;
 use crate::types::Error;
 use soroban_sdk::{token, Address, Env, MuxedAddress};
 
-pub fn contribute(env: &Env, member_addr: Address) -> Result<(), Error> {
-    member_addr.require_auth();
+/// Shared body of `contribute()`/`contribute_via_gateway()` — identical in
+/// every way except WHO pays and WHO must authorize it. `payer` is asserted
+/// to `require_auth()` before anything else moves, so a caller can never
+/// mark a member as contributed without the asserted payer's real signature
+/// backing an actual token transfer.
+fn contribute_from(env: &Env, payer: Address, member_addr: Address) -> Result<(), Error> {
+    payer.require_auth();
     let mut pool = storage::read_pool(env)?;
     if !pool.activated {
         return Err(Error::PoolNotActivated);
@@ -23,7 +28,7 @@ pub fn contribute(env: &Env, member_addr: Address) -> Result<(), Error> {
     let token_client = token::Client::new(env, &pool.token);
     let contract_addr = env.current_contract_address();
     token_client.transfer(
-        &member_addr,
+        &payer,
         &MuxedAddress::from(&contract_addr),
         &pool.contribution_amount,
     );
@@ -60,6 +65,24 @@ pub fn contribute(env: &Env, member_addr: Address) -> Result<(), Error> {
     );
 
     Ok(())
+}
+
+pub fn contribute(env: &Env, member_addr: Address) -> Result<(), Error> {
+    contribute_from(env, member_addr.clone(), member_addr)
+}
+
+/// Records a contribution paid through the QRIS gateway (deposits don't
+/// need the member's own live signature — money moving INTO a pool on
+/// someone's behalf can't be used to steal from them, only to (harmlessly)
+/// credit them, unlike `exit()`/`pay_debt()` which move money the other
+/// way and rightly require the member's own auth). The actual transfer is
+/// sourced from `pool.gateway` — set once, at construction, never
+/// organizer- or gov-settable — so crediting a contribution is always tied
+/// to a real transfer the gateway itself authorized, not free bookkeeping
+/// a captured `gateway` address could forge.
+pub fn contribute_via_gateway(env: &Env, member_addr: Address) -> Result<(), Error> {
+    let pool = storage::read_pool(env)?;
+    contribute_from(env, pool.gateway, member_addr)
 }
 
 /// Pays a cycle's payout to the front-of-queue member still eligible for
