@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { requireUser } from '@/lib/session';
-import { getPool } from '@/lib/pools';
+import { getMemberStatus, getPool } from '@/lib/pools';
 
 /**
  * Read-only pool info for the Mini App. Anyone who knows the id may view
@@ -25,6 +25,8 @@ export async function GET(
     return NextResponse.json({ error: 'Arisan tidak ditemukan.' }, { status: 404 });
   }
 
+  const memberStatus = await getMemberStatus(id, user.id);
+
   return NextResponse.json({
     id: pool.id,
     name: pool.name,
@@ -34,5 +36,6 @@ export async function GET(
     contributionAmount: pool.contribution_amount,
     cycleLengthSecs: pool.cycle_length_secs,
     isOrganizer: pool.organizer_telegram_id === user.id,
+    memberStatus,
   });
 }

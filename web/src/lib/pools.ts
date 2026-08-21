@@ -109,6 +109,19 @@ export async function isInterested(
   return Boolean(data);
 }
 
+export async function getMemberStatus(
+  poolId: string,
+  telegramId: string,
+): Promise<'interested' | 'joined' | null> {
+  const { data } = await supabase
+    .from('pool_members')
+    .select('status')
+    .eq('pool_id', poolId)
+    .eq('telegram_id', telegramId)
+    .maybeSingle();
+  return (data?.status as 'interested' | 'joined' | undefined) ?? null;
+}
+
 export async function markJoinedOnChain(
   poolId: string,
   telegramId: string,

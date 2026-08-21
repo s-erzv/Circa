@@ -18,6 +18,7 @@ type PoolInfo = {
   contractId: string | null;
   memberCount: number;
   contributionAmount: number;
+  memberStatus: 'interested' | 'joined' | null;
 };
 
 type WalletStatus = { hasWallet: boolean; walletAddress: string | null; credentialId: string | null };
@@ -53,6 +54,13 @@ export default function PoolJoinPage({ params }: { params: Promise<{ id: string 
       if (!p.contractId || !['forming', 'active'].includes(p.status)) {
         setError('Arisan ini belum siap buat digabungin.');
         setPhase('error');
+        return;
+      }
+      // Already joined — most often the organizer, auto-joined right after
+      // confirming. Nothing left to sign; re-running join() would just fail
+      // against the contract (already a member) with an opaque error.
+      if (p.memberStatus === 'joined') {
+        setPhase('done');
         return;
       }
       const status = await apiFetch<WalletStatus>('/api/wallet/status');
