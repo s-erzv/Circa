@@ -67,9 +67,9 @@ export async function simulateQrPayment(externalId: string, amountIdr: number): 
       method: 'POST',
       headers: {
         Authorization: authHeader(),
-        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Type': 'application/json',
       },
-      body: `amount=${amountIdr}`,
+      body: JSON.stringify({ amount: amountIdr }),
     },
   );
 
