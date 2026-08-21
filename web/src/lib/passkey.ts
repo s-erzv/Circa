@@ -74,10 +74,20 @@ export async function createPasskeyWallet(): Promise<WalletCreated> {
  * the raw telegram_id. A URL is a weak place to carry identity (logs,
  * history, Referer, over-the-shoulder), so what travels there must be
  * useless once spent and useless after a few minutes.
+ *
+ * `returnPayload` is the bot.ts `/start` payload (e.g. `join_<poolId>`) for
+ * whatever the caller was doing — it's not sensitive, just routing, so it
+ * rides along as a plain query param rather than through the server. It
+ * lets the handoff's "done" screen link straight back to the exact step the
+ * user left, instead of a bare "go back to Telegram" that leaves them to
+ * hunt for the right button themselves.
  */
-export async function handOffToSystemBrowser(): Promise<void> {
+export async function handOffToSystemBrowser(returnPayload?: string): Promise<void> {
   const { url } = await apiFetch<{ url: string }>('/api/wallet/handoff', {
     method: 'POST',
   });
-  openInSystemBrowser(url);
+  const withReturn = returnPayload
+    ? `${url}&next=${encodeURIComponent(returnPayload)}`
+    : url;
+  openInSystemBrowser(withReturn);
 }

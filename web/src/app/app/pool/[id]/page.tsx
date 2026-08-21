@@ -66,7 +66,7 @@ export default function PoolConfirmPage({ params }: { params: Promise<{ id: stri
   async function onCreateWallet() {
     if (!isPasskeySupported()) {
       try {
-        await handOffToSystemBrowser();
+        await handOffToSystemBrowser(`confirm_${id}`);
       } catch (e) {
         setError((e as Error).message);
       }
@@ -84,7 +84,7 @@ export default function PoolConfirmPage({ params }: { params: Promise<{ id: stri
       // isPasskeySupported()'s static check can't see coming.
       if (isWebAuthnBlockedError(e)) {
         try {
-          await handOffToSystemBrowser();
+          await handOffToSystemBrowser(`confirm_${id}`);
         } catch (handoffError) {
           setError((handoffError as Error).message);
           setPhase('needs-wallet');

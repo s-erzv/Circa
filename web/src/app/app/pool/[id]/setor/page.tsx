@@ -64,7 +64,7 @@ export default function PoolSetorPage({ params }: { params: Promise<{ id: string
   async function onCreateWallet() {
     if (!isPasskeySupported()) {
       try {
-        await handOffToSystemBrowser();
+        await handOffToSystemBrowser(`setor_${id}`);
       } catch (e) {
         setError((e as Error).message);
       }
@@ -78,7 +78,7 @@ export default function PoolSetorPage({ params }: { params: Promise<{ id: string
     } catch (e) {
       if (isWebAuthnBlockedError(e)) {
         try {
-          await handOffToSystemBrowser();
+          await handOffToSystemBrowser(`setor_${id}`);
         } catch (handoffError) {
           setError((handoffError as Error).message);
           setPhase('needs-wallet');

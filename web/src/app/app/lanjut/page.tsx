@@ -34,9 +34,12 @@ export default function LanjutPage() {
   );
 }
 
+const BOT_USERNAME = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || 'circagram_bot';
+
 function LanjutInner() {
   const params = useSearchParams();
   const token = params.get('t');
+  const next = params.get('next');
   const [phase, setPhase] = useState<Phase>('redeeming');
   const [error, setError] = useState<string | null>(null);
   // The redeem token is single-use. React StrictMode double-invokes effects
@@ -128,8 +131,14 @@ function LanjutInner() {
         <>
           <p className="text-lg">Dompet kamu udah jadi ✅</p>
           <p className="max-w-sm text-sm opacity-70">
-            Balik ke Telegram ya, lanjutin setorannya di sana.
+            Balik ke Telegram ya, lanjutin di sana.
           </p>
+          <a
+            href={`https://t.me/${BOT_USERNAME}${next ? `?start=${next}` : ''}`}
+            className="rounded-xl bg-foreground px-5 py-3 text-background font-medium"
+          >
+            Buka Telegram
+          </a>
         </>
       )}
     </main>
