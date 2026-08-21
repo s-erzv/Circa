@@ -79,6 +79,50 @@ export async function simulateQrPayment(externalId: string, amountIdr: number): 
   }
 }
 
+export type XenditInvoice = {
+  id: string;
+  external_id: string;
+  status: 'PENDING' | 'PAID' | 'EXPIRED';
+  invoice_url: string;
+};
+
+/**
+ * Creates a Xendit-hosted checkout page restricted to QRIS, returning
+ * `invoice_url` to redirect the payer to.
+ *
+ * Chosen over the raw QR Codes API (`createQrCode` above) specifically for
+ * how it reads to the payer: a self-rendered QR image inside our own Mini
+ * App page carries none of the trust signals a real payment page does
+ * (merchant name/logo, Xendit's own branding) — this is Xendit's actual
+ * hosted page, not something we assembled ourselves.
+ */
+export async function createInvoice(params: {
+  externalId: string;
+  amountIdr: number;
+  description: string;
+}): Promise<XenditInvoice> {
+  const res = await fetch(`${XENDIT_BASE}/v2/invoices`, {
+    method: 'POST',
+    headers: {
+      Authorization: authHeader(),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      external_id: params.externalId,
+      amount: params.amountIdr,
+      currency: 'IDR',
+      payment_methods: ['QRIS'],
+      description: params.description,
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Xendit createInvoice failed (${res.status}): ${body}`);
+  }
+  return res.json();
+}
+
 export type XenditQrPaymentWebhook = {
   event: 'qr.payment';
   id: string;

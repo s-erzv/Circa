@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
-import { verifyWebhookToken, type XenditQrPaymentWebhook } from '@/lib/payments/xendit';
+import { verifyWebhookToken } from '@/lib/payments/xendit';
 import { mintIdrt } from '@/lib/payments/mint';
 import { runContributeViaGateway } from '@/lib/soroban/cycle';
 import { getPool as getOnChainPool } from '@/lib/soroban/read';
@@ -21,14 +21,28 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
-  const body: XenditQrPaymentWebhook = await request.json();
-  if (body.event !== 'qr.payment') {
-    // Ignore anything we don't specifically handle rather than erroring —
-    // Xendit may add event types this endpoint has no opinion about.
+  const body = await request.json();
+
+  // Two shapes land on this one endpoint: the legacy QR Codes callback
+  // (`event: 'qr.payment'`, kept for the simulate-topup.ts testing script)
+  // and the Invoice callback the live product now uses (no `event` field at
+  // all — just the invoice object itself, `status` being how a real
+  // payment is told apart from PENDING/EXPIRED). Anything else — Xendit
+  // adding event types this endpoint has no opinion about — is ignored
+  // rather than erroring.
+  let externalId: string | undefined;
+  let paidAmount: number | undefined;
+
+  if (body.event === 'qr.payment') {
+    externalId = body.external_id ?? body.qr_code?.external_id;
+    paidAmount = body.amount;
+  } else if (body.status === 'PAID') {
+    externalId = body.external_id;
+    paidAmount = body.paid_amount ?? body.amount;
+  } else {
     return NextResponse.json({ ok: true });
   }
 
-  const externalId = body.external_id ?? body.qr_code?.external_id;
   if (!externalId) {
     return NextResponse.json({ error: 'missing external_id' }, { status: 400 });
   }
@@ -67,9 +81,9 @@ export async function POST(request: Request) {
   // must match what we asked for. A mismatch here would mean either a
   // Xendit-side inconsistency or a QR code that was tampered with/reused —
   // either way, do not mint blindly.
-  if (body.amount !== claimed.amount) {
+  if (paidAmount !== claimed.amount) {
     console.error(
-      `Xendit webhook amount mismatch for intent ${claimed.id}: expected ${claimed.amount}, got ${body.amount}`,
+      `Xendit webhook amount mismatch for intent ${claimed.id}: expected ${claimed.amount}, got ${paidAmount}`,
     );
     await supabase.from('payment_intents').update({ status: 'failed' }).eq('id', claimed.id);
     return NextResponse.json({ error: 'amount mismatch' }, { status: 400 });

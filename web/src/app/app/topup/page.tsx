@@ -1,26 +1,28 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import QRCode from 'qrcode';
 import { apiFetch } from '@/lib/api-client';
-import { initTelegramView, isInsideTelegram } from '@/lib/telegram-client';
+import { initTelegramView, isInsideTelegram, openInSystemBrowser } from '@/lib/telegram-client';
 
 type Phase = 'entering' | 'creating' | 'waiting' | 'paid' | 'error';
 
 const QUICK_AMOUNTS = [50_000, 100_000, 250_000, 500_000];
 
 /**
- * Top up your own wallet via QRIS, scanned with whatever payment app you
- * already have (GoPay, bank m-banking, etc.) — this is the QRIS side of
- * the bridge described in mint.ts. Deliberately separate from any specific
- * pool's setoran: this credits your wallet balance in general, and
- * contribute() (a signed action you take yourself) is what later moves
- * that balance into a pool.
+ * Top up your own wallet via QRIS, paid on Xendit's own hosted checkout
+ * page — this is the QRIS side of the bridge described in mint.ts.
+ * Deliberately separate from any specific pool's setoran: this credits your
+ * wallet balance in general, and contribute() (a signed action you take
+ * yourself) is what later moves that balance into a pool.
+ *
+ * Redirects to Xendit's page rather than rendering a QR ourselves: a raw
+ * code assembled inside our own Mini App carries none of the trust signals
+ * a real payment page does (merchant name, Xendit's own branding).
  */
 export default function TopupPage() {
   const [phase, setPhase] = useState<Phase>('entering');
   const [amount, setAmount] = useState(100_000);
-  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [invoiceUrl, setInvoiceUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -31,7 +33,7 @@ export default function TopupPage() {
     };
   }, []);
 
-  async function onCreateQr() {
+  async function onPay() {
     if (!isInsideTelegram()) {
       setError('Buka lewat Telegram ya.');
       setPhase('error');
@@ -40,13 +42,13 @@ export default function TopupPage() {
     setPhase('creating');
     setError(null);
     try {
-      const { intentId, qrString } = await apiFetch<{ intentId: string; qrString: string }>(
-        '/api/payments/qris/create',
-        { method: 'POST', body: JSON.stringify({ amount }) },
-      );
+      const { intentId, invoiceUrl: url } = await apiFetch<{
+        intentId: string;
+        invoiceUrl: string;
+      }>('/api/payments/qris/create', { method: 'POST', body: JSON.stringify({ amount }) });
 
-      const dataUrl = await QRCode.toDataURL(qrString, { width: 320, margin: 1 });
-      setQrDataUrl(dataUrl);
+      setInvoiceUrl(url);
+      openInSystemBrowser(url);
       setPhase('waiting');
 
       pollRef.current = setInterval(async () => {
@@ -102,23 +104,30 @@ export default function TopupPage() {
             ))}
           </div>
           <button
-            onClick={onCreateQr}
+            onClick={onPay}
             className="rounded-xl bg-foreground px-4 py-3 text-background font-medium"
           >
-            Bikin QRIS — Rp{amount.toLocaleString('id-ID')}
+            Bayar — Rp{amount.toLocaleString('id-ID')}
           </button>
         </>
       )}
 
-      {phase === 'creating' && <p className="text-sm opacity-60">Bikin kode QRIS…</p>}
+      {phase === 'creating' && <p className="text-sm opacity-60">Bikin halaman pembayaran…</p>}
 
-      {phase === 'waiting' && qrDataUrl && (
-        <section className="flex flex-col items-center gap-4">
-          <img src={qrDataUrl} alt="Kode QRIS" className="rounded-xl" />
+      {phase === 'waiting' && (
+        <section className="flex flex-col gap-4">
           <p className="text-sm opacity-70">
-            Scan pakai aplikasi bayar kamu. Halaman ini otomatis update begitu
-            pembayaran masuk.
+            Selesain pembayaran di tab yang baru kebuka. Halaman ini otomatis
+            update begitu lunas.
           </p>
+          {invoiceUrl && (
+            <button
+              onClick={() => openInSystemBrowser(invoiceUrl)}
+              className="rounded-xl border border-black/10 px-4 py-3 text-sm font-medium dark:border-white/15"
+            >
+              Buka halaman pembayaran lagi
+            </button>
+          )}
         </section>
       )}
 

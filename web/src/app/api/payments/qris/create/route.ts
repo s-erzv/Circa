@@ -2,9 +2,8 @@ import { NextResponse } from 'next/server';
 import { requireUser } from '@/lib/session';
 import { supabase } from '@/lib/supabase';
 import { getPool } from '@/lib/pools';
-import { createQrCode } from '@/lib/payments/xendit';
+import { createInvoice } from '@/lib/payments/xendit';
 
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 const MIN_IDR = 10_000;
 const MAX_IDR = 5_000_000;
 
@@ -12,7 +11,7 @@ const MAX_IDR = 5_000_000;
  * Starts a QRIS payment — either a generic wallet top-up (`amount`) or a
  * specific pool's setoran (`poolId`), creating the tracking row first (so
  * the webhook always has something to find, even if Xendit's response
- * never reaches us), then asking Xendit for the actual QR code.
+ * never reaches us), then asking Xendit for a hosted checkout page.
  *
  * For `poolId`, the amount is the pool's own `contribution_amount` — never
  * client-supplied — since this is what the webhook later credits on-chain
@@ -80,21 +79,24 @@ export async function POST(request: Request) {
   }
 
   try {
-    const qr = await createQrCode({
+    const invoice = await createInvoice({
       externalId: intent.id,
       amountIdr,
-      callbackUrl: `${APP_URL}/api/payments/xendit/webhook`,
+      description: poolId ? 'Setoran arisan Circa' : 'Isi saldo Circa',
     });
 
+    // xendit_qr_id predates the invoice-based flow (migration 007) — it
+    // just holds whatever id Xendit's side uses to identify the payment,
+    // QR or invoice.
     await supabase
       .from('payment_intents')
-      .update({ xendit_qr_id: qr.id, external_id: qr.external_id })
+      .update({ xendit_qr_id: invoice.id, external_id: invoice.external_id })
       .eq('id', intent.id);
 
-    return NextResponse.json({ intentId: intent.id, qrString: qr.qr_string });
+    return NextResponse.json({ intentId: intent.id, invoiceUrl: invoice.invoice_url });
   } catch (err) {
-    console.error('Xendit QR creation failed:', err);
+    console.error('Xendit invoice creation failed:', err);
     await supabase.from('payment_intents').update({ status: 'failed' }).eq('id', intent.id);
-    return NextResponse.json({ error: 'Gagal bikin kode QRIS. Coba lagi ya.' }, { status: 502 });
+    return NextResponse.json({ error: 'Gagal bikin halaman pembayaran. Coba lagi ya.' }, { status: 502 });
   }
 }
