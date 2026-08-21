@@ -22,6 +22,12 @@ function sponsor(): Keypair {
   return Keypair.fromSecret(secret);
 }
 
+function issuer(): Keypair {
+  const secret = process.env.IDRT_ISSUER_SECRET;
+  if (!secret) throw new Error('IDRT_ISSUER_SECRET is not configured');
+  return Keypair.fromSecret(secret);
+}
+
 function server(): rpc.Server {
   return new rpc.Server(RPC_URL);
 }
@@ -46,6 +52,7 @@ export type RelayAction =
       poolId: string;
       organizer: string;
       token: string;
+      gateway: string;
       contributionAmount: string;
       memberCount: number;
       cycleLengthSecs: number;
@@ -82,7 +89,7 @@ function buildInvocation(action: RelayAction): {
       };
     case 'pool_create':
       // Argument order must match ArisanPool::create exactly:
-      // organizer, token, contribution_amount, member_count,
+      // organizer, token, gateway, contribution_amount, member_count,
       // cycle_length_secs, deadline_offset_secs, penalty_amount,
       // exit_penalty_amount, reserve_bps.
       return {
@@ -91,6 +98,7 @@ function buildInvocation(action: RelayAction): {
         args: [
           new Address(action.organizer).toScVal(),
           new Address(action.token).toScVal(),
+          new Address(action.gateway).toScVal(),
           i128(action.contributionAmount),
           nativeToScVal(action.memberCount, { type: 'u32' }),
           nativeToScVal(action.cycleLengthSecs, { type: 'u64' }),
@@ -340,6 +348,56 @@ export async function callPermissionless(
 
   const prepared = await rpcServer.prepareTransaction(tx);
   prepared.sign(sponsorKp);
+
+  const sendResult = await rpcServer.sendTransaction(prepared);
+  if (sendResult.status === 'ERROR') {
+    throw new Error(`submit failed: ${JSON.stringify(sendResult)}`);
+  }
+
+  for (let i = 0; i < 20; i++) {
+    const status = await rpcServer.getTransaction(sendResult.hash);
+    if (status.status === rpc.Api.GetTransactionStatus.SUCCESS) {
+      return { status: 'SUCCESS', hash: sendResult.hash };
+    }
+    if (status.status === rpc.Api.GetTransactionStatus.FAILED) {
+      return { status: 'FAILED', hash: sendResult.hash };
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  throw new Error('transaction confirmation timed out');
+}
+
+/**
+ * Invokes `ArisanPool::contribute_via_gateway`, authorized by the IDRT
+ * issuer acting as the transaction's own source account. `pool.gateway` is
+ * set to the issuer's address at pool creation (see `pool.ts`'s
+ * `prepareCreatePool`), and a classic account satisfies its own
+ * `require_auth()` just by being the transaction's signed source — no
+ * separate Soroban auth entry needed, structurally identical to
+ * `callPermissionless` except THIS call does require one specific party's
+ * authorization (the issuer's), not none at all. Never reuse this for a
+ * method whose real auth requirement belongs to a member, not the issuer.
+ */
+export async function callAsIssuer(
+  contractId: string,
+  method: string,
+  args: xdr.ScVal[] = [],
+): Promise<SubmitResult> {
+  const rpcServer = server();
+  const issuerKp = issuer();
+  const issuerAccount = await rpcServer.getAccount(issuerKp.publicKey());
+
+  const contract = new Contract(contractId);
+  const tx = new TransactionBuilder(issuerAccount, {
+    fee: '1000000',
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(contract.call(method, ...args))
+    .setTimeout(60)
+    .build();
+
+  const prepared = await rpcServer.prepareTransaction(tx);
+  prepared.sign(issuerKp);
 
   const sendResult = await rpcServer.sendTransaction(prepared);
   if (sendResult.status === 'ERROR') {

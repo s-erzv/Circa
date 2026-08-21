@@ -30,10 +30,10 @@ const continuingLabel: Record<ActionKind, string> = {
 };
 
 const doneLabel: Record<ActionKind, string> = {
-  confirm: 'Arisan ini udah jadi, kamu juga udah otomatis gabung ✅',
-  join: 'Kamu resmi gabung ✅',
-  setor: 'Setoran berhasil ✅',
-  jadwal: 'Dompet kamu udah jadi ✅',
+  confirm: 'Arisan ini udah jadi, kamu juga udah otomatis gabung.',
+  join: 'Kamu resmi gabung.',
+  setor: 'Setoran berhasil.',
+  jadwal: 'Dompet kamu udah jadi.',
 };
 
 /**
@@ -313,7 +313,7 @@ function LanjutInner() {
 
       {phase === 'done' && (
         <>
-          <p className="text-lg">{resultLabel ?? 'Dompet kamu udah jadi ✅'}</p>
+          <p className="text-lg">{resultLabel ?? 'Dompet kamu udah jadi.'}</p>
           <p className="max-w-sm text-sm opacity-70">
             {error
               ? 'Dompetnya aman kok — tinggal balik ke Telegram buat coba lagi.'

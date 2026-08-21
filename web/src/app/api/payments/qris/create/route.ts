@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireUser } from '@/lib/session';
 import { supabase } from '@/lib/supabase';
+import { getPool } from '@/lib/pools';
 import { createQrCode } from '@/lib/payments/xendit';
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
@@ -8,9 +9,15 @@ const MIN_IDR = 10_000;
 const MAX_IDR = 5_000_000;
 
 /**
- * Starts a QRIS top-up: creates the tracking row first (so the webhook
- * always has something to find, even if Xendit's response never reaches
- * us), then asks Xendit for the actual QR code.
+ * Starts a QRIS payment — either a generic wallet top-up (`amount`) or a
+ * specific pool's setoran (`poolId`), creating the tracking row first (so
+ * the webhook always has something to find, even if Xendit's response
+ * never reaches us), then asking Xendit for the actual QR code.
+ *
+ * For `poolId`, the amount is the pool's own `contribution_amount` — never
+ * client-supplied — since this is what the webhook later credits on-chain
+ * via `contribute_via_gateway`, and a client-controlled amount there would
+ * let a payer choose their own contribution size.
  */
 export async function POST(request: Request) {
   let user;
@@ -29,13 +36,28 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Kamu belum punya dompet.' }, { status: 409 });
   }
 
-  const { amount } = await request.json().catch(() => ({ amount: null }));
-  const amountIdr = Number(amount);
-  if (!Number.isInteger(amountIdr) || amountIdr < MIN_IDR || amountIdr > MAX_IDR) {
-    return NextResponse.json(
-      { error: `Nominal harus antara Rp${MIN_IDR.toLocaleString('id-ID')} dan Rp${MAX_IDR.toLocaleString('id-ID')}.` },
-      { status: 400 },
-    );
+  const body = await request.json().catch(() => ({}));
+  let amountIdr: number;
+  let poolId: string | null = null;
+
+  if (body.poolId) {
+    const pool = await getPool(body.poolId);
+    if (!pool || !pool.contract_id || pool.status !== 'active') {
+      return NextResponse.json({ error: 'Arisan ini belum aktif atau udah selesai.' }, { status: 409 });
+    }
+    if (!pool.contribution_amount) {
+      return NextResponse.json({ error: 'internal: missing contribution_amount' }, { status: 500 });
+    }
+    poolId = pool.id;
+    amountIdr = pool.contribution_amount;
+  } else {
+    amountIdr = Number(body.amount);
+    if (!Number.isInteger(amountIdr) || amountIdr < MIN_IDR || amountIdr > MAX_IDR) {
+      return NextResponse.json(
+        { error: `Nominal harus antara Rp${MIN_IDR.toLocaleString('id-ID')} dan Rp${MAX_IDR.toLocaleString('id-ID')}.` },
+        { status: 400 },
+      );
+    }
   }
 
   const { data: intent, error } = await supabase
@@ -44,6 +66,7 @@ export async function POST(request: Request) {
       telegram_id: user.id,
       wallet_address: userRow.wallet_address,
       amount: amountIdr,
+      pool_id: poolId,
       xendit_qr_id: '',
       external_id: '',
       status: 'pending',

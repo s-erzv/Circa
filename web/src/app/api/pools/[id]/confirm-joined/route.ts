@@ -81,9 +81,9 @@ export async function POST(
         await bot.api
           .sendMessage(
             pool.telegram_chat_id,
-            `Slot penuh! 🎉 Arisan "${pool.name}" udah aktif.\n\n` +
+            `Slot penuh! Arisan "${pool.name}" udah aktif.\n\n` +
               `Urutan kocokan:\n${order}\n\n` +
-              `⚠️ Ini proyeksi — bisa geser kalau ada yang di-skip/keluar/dikeluarkan lewat voting. ` +
+              `Ini proyeksi — bisa geser kalau ada yang di-skip/keluar/dikeluarkan lewat voting. ` +
               `Giliran yang sebenarnya selalu bisa dicek langsung di kontrak. Yuk mulai setor.`,
             { reply_markup: keyboard },
           )

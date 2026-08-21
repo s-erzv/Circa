@@ -122,7 +122,7 @@ export default function SetorPage() {
 
       {phase === 'ready-to-pay' && (
         <section className="rounded-xl border border-black/10 p-4 text-sm dark:border-white/15">
-          <p className="font-medium">Dompet kamu siap ✅</p>
+          <p className="font-medium">Dompet kamu siap</p>
           <p className="mt-1 opacity-70">
             Alur pembayaran (top-up Rupiah lewat anchor) nyusul di tahap
             berikutnya.

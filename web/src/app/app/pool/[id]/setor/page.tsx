@@ -1,14 +1,8 @@
 'use client';
 
-import { use, useEffect, useState } from 'react';
+import { use, useEffect, useRef, useState } from 'react';
+import QRCode from 'qrcode';
 import { apiFetch } from '@/lib/api-client';
-import {
-  createPasskeyWallet,
-  handOffToSystemBrowser,
-  isPasskeySupported,
-  isWebAuthnBlockedError,
-} from '@/lib/passkey';
-import { relayAction } from '@/lib/soroban/relay-client';
 import { initTelegramView, isInsideTelegram } from '@/lib/telegram-client';
 
 type PoolInfo = {
@@ -19,20 +13,23 @@ type PoolInfo = {
   contributionAmount: number;
 };
 
-type WalletStatus = { hasWallet: boolean; walletAddress: string | null; credentialId: string | null };
-
-type Phase = 'loading' | 'ready' | 'needs-wallet' | 'creating-wallet' | 'paying' | 'done' | 'error';
+type Phase = 'loading' | 'ready' | 'creating' | 'waiting' | 'paid' | 'error';
 
 /**
- * A cycle's setoran. Same wallet-then-sign shape as join — contribute()
- * needs the member's own passkey too — but this one repeats every cycle,
- * so returning members skip straight to 'ready'.
+ * A cycle's setoran, paid straight through QRIS — no wallet balance, no
+ * passkey signature. Depositing money into a pool can't be used to steal
+ * from anyone (only to harmlessly credit them), so unlike join()/exit() it
+ * doesn't need the member's own live signature: the QRIS payment itself IS
+ * the authorization, verified by the webhook before it ever touches the
+ * chain (see contribute_via_gateway in cycle.rs).
  */
 export default function PoolSetorPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [phase, setPhase] = useState<Phase>('loading');
   const [pool, setPool] = useState<PoolInfo | null>(null);
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     initTelegramView();
@@ -42,6 +39,9 @@ export default function PoolSetorPage({ params }: { params: Promise<{ id: string
       return;
     }
     load();
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
   }, []);
 
   async function load() {
@@ -53,74 +53,42 @@ export default function PoolSetorPage({ params }: { params: Promise<{ id: string
         setPhase('error');
         return;
       }
-      const status = await apiFetch<WalletStatus>('/api/wallet/status');
-      setPhase(status.hasWallet ? 'ready' : 'needs-wallet');
+      setPhase('ready');
     } catch (e) {
       setError((e as Error).message);
       setPhase('error');
     }
   }
 
-  async function onCreateWallet() {
-    if (!isPasskeySupported()) {
-      try {
-        await handOffToSystemBrowser(`setor_${id}`);
-      } catch (e) {
-        setError((e as Error).message);
-      }
-      return;
-    }
-    setPhase('creating-wallet');
+  async function onCreateQr() {
+    setPhase('creating');
     setError(null);
     try {
-      await createPasskeyWallet();
-      setPhase('ready');
-    } catch (e) {
-      if (isWebAuthnBlockedError(e)) {
-        try {
-          await handOffToSystemBrowser(`setor_${id}`);
-        } catch (handoffError) {
-          setError((handoffError as Error).message);
-          setPhase('needs-wallet');
-        }
-        return;
-      }
-      setError((e as Error).message);
-      setPhase('needs-wallet');
-    }
-  }
-
-  async function onPay() {
-    setPhase('paying');
-    setError(null);
-    try {
-      const status = await apiFetch<WalletStatus>('/api/wallet/status');
-      if (!status.hasWallet || !status.walletAddress || !status.credentialId || !pool?.contractId) {
-        throw new Error('Dompet belum siap.');
-      }
-
-      await relayAction(
-        { kind: 'pool_contribute', poolId: pool.contractId, member: status.walletAddress },
-        status.credentialId,
+      const { intentId, qrString } = await apiFetch<{ intentId: string; qrString: string }>(
+        '/api/payments/qris/create',
+        { method: 'POST', body: JSON.stringify({ poolId: id }) },
       );
 
-      await apiFetch(`/api/pools/${id}/confirm-contributed`, { method: 'POST' }).catch((err) =>
-        console.error('confirm-contributed failed:', err),
-      );
-      setPhase('done');
-    } catch (e) {
-      // The wallet already exists here, so this is the *signing* ceremony
-      // (`publickey-credentials-get`) hitting the same iframe restriction
-      // `onCreateWallet` guards against for the *creation* one — same fix.
-      if (isWebAuthnBlockedError(e)) {
+      const dataUrl = await QRCode.toDataURL(qrString, { width: 320, margin: 1 });
+      setQrDataUrl(dataUrl);
+      setPhase('waiting');
+
+      pollRef.current = setInterval(async () => {
         try {
-          await handOffToSystemBrowser(`setor_${id}`);
-        } catch (handoffError) {
-          setError((handoffError as Error).message);
+          const status = await apiFetch<{ status: string }>(`/api/payments/qris/${intentId}`);
+          if (status.status === 'paid') {
+            if (pollRef.current) clearInterval(pollRef.current);
+            setPhase('paid');
+          } else if (status.status === 'failed' || status.status === 'expired') {
+            if (pollRef.current) clearInterval(pollRef.current);
+            setError('Pembayaran gagal atau kedaluwarsa. Coba lagi ya.');
+            setPhase('error');
+          }
+        } catch {
+          // Transient poll failure — try again next tick.
         }
-        setPhase('ready');
-        return;
-      }
+      }, 3000);
+    } catch (e) {
       setError((e as Error).message);
       setPhase('ready');
     }
@@ -138,48 +106,40 @@ export default function PoolSetorPage({ params }: { params: Promise<{ id: string
 
       {phase === 'loading' && <p className="text-sm opacity-60">Sebentar…</p>}
 
-      {pool && phase !== 'loading' && phase !== 'error' && phase !== 'done' && (
-        <section className="rounded-xl border border-black/10 p-4 text-sm dark:border-white/15">
-          <p className="text-lg font-medium">
-            Rp{pool.contributionAmount.toLocaleString('id-ID')}
-          </p>
-          <p className="mt-1 text-xs opacity-60">⚠️ Testnet: token uji, belum Rupiah beneran.</p>
-        </section>
-      )}
-
-      {phase === 'needs-wallet' && (
+      {pool && (phase === 'ready' || phase === 'creating') && (
         <>
-          <p className="text-sm opacity-70">
-            Sekali doang: HP kamu bakal minta FaceID/sidik jari buat bikin kunci yang
-            cuma ada di HP kamu.
-          </p>
+          <section className="rounded-xl border border-black/10 p-4 text-sm dark:border-white/15">
+            <p className="text-lg font-medium">
+              Rp{pool.contributionAmount.toLocaleString('id-ID')}
+            </p>
+            <p className="mt-1 opacity-70">
+              Bayar pakai QRIS dari aplikasi apa aja yang udah kamu punya (GoPay,
+              m-banking, dll) — begitu lunas, langsung tercatat sebagai setoran
+              kamu, nggak perlu tanda tangan apa-apa lagi.
+            </p>
+            <p className="mt-2 text-xs opacity-60">Testnet: token uji, belum Rupiah beneran.</p>
+          </section>
           <button
-            onClick={onCreateWallet}
-            className="rounded-xl bg-foreground px-4 py-3 text-background font-medium"
+            onClick={onCreateQr}
+            disabled={phase === 'creating'}
+            className="rounded-xl bg-foreground px-4 py-3 text-background font-medium disabled:opacity-60"
           >
-            Bikin dompet & lanjut
+            {phase === 'creating' ? 'Bikin kode QRIS…' : 'Bikin QRIS & Setor'}
           </button>
         </>
       )}
 
-      {phase === 'creating-wallet' && (
-        <p className="text-sm opacity-60">Lagi bikin dompet kamu…</p>
+      {phase === 'waiting' && qrDataUrl && (
+        <section className="flex flex-col items-center gap-4">
+          <img src={qrDataUrl} alt="Kode QRIS" className="rounded-xl" />
+          <p className="text-sm opacity-70">
+            Scan pakai aplikasi bayar kamu. Halaman ini otomatis update begitu
+            pembayaran masuk.
+          </p>
+        </section>
       )}
 
-      {phase === 'ready' && (
-        <button
-          onClick={onPay}
-          className="rounded-xl bg-foreground px-4 py-3 text-background font-medium"
-        >
-          Setor Sekarang
-        </button>
-      )}
-
-      {phase === 'paying' && (
-        <p className="text-sm opacity-60">Lagi proses setoran… jangan tutup dulu ya.</p>
-      )}
-
-      {phase === 'done' && <p className="text-lg">Setoran berhasil ✅</p>}
+      {phase === 'paid' && <p className="text-lg">Setoran berhasil.</p>}
     </main>
   );
 }

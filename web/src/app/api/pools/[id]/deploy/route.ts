@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { Keypair } from '@stellar/stellar-sdk';
 import { requireUser } from '@/lib/session';
 import { supabase } from '@/lib/supabase';
 import { getPool } from '@/lib/pools';
@@ -72,6 +73,19 @@ export async function POST(
     );
   }
 
+  const issuerSecret = process.env.IDRT_ISSUER_SECRET;
+  if (!issuerSecret) {
+    return NextResponse.json(
+      { error: 'internal: IDRT_ISSUER_SECRET not configured' },
+      { status: 500 },
+    );
+  }
+  // The issuer doubles as `pool.gateway` — the one address allowed to call
+  // contribute_via_gateway — since it can already supply IDRT without limit
+  // (see mint.ts), the same property contribute_via_gateway's internal
+  // transfer relies on.
+  const gatewayAddress = Keypair.fromSecret(issuerSecret).publicKey();
+
   try {
     let contractId = pool.contract_id;
     if (!contractId) {
@@ -85,6 +99,7 @@ export async function POST(
     const prepared = await prepareCreatePool(contractId, {
       organizer: userRow.wallet_address,
       token: tokenAddress,
+      gateway: gatewayAddress,
       contributionAmount: String(pool.contribution_amount),
       memberCount: pool.member_count,
       cycleLengthSecs: pool.cycle_length_secs,

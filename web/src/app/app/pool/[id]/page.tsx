@@ -232,7 +232,7 @@ export default function PoolConfirmPage({ params }: { params: Promise<{ id: stri
         <section className="rounded-xl border border-black/10 p-4 text-sm dark:border-white/15">
           <p>• {pool.memberCount} anggota</p>
           <p>• Setoran Rp{pool.contributionAmount.toLocaleString('id-ID')} / siklus</p>
-          <p className="mt-2 text-xs opacity-60">⚠️ Testnet: token uji, belum Rupiah beneran.</p>
+          <p className="mt-2 text-xs opacity-60">Testnet: token uji, belum Rupiah beneran.</p>
         </section>
       )}
 
@@ -282,8 +282,8 @@ export default function PoolConfirmPage({ params }: { params: Promise<{ id: stri
             {pool?.status === 'draft'
               ? 'Belum dikonfirmasi.'
               : autoJoined
-                ? 'Arisan ini udah jadi, dan kamu udah otomatis gabung ✅'
-                : 'Arisan ini udah jadi ✅ — balik ke grup buat ikutan.'}
+                ? 'Arisan ini udah jadi, dan kamu udah otomatis gabung.'
+                : 'Arisan ini udah jadi — balik ke grup buat ikutan.'}
           </p>
           {pool && ['active', 'closed'].includes(pool.status) && (
             <a

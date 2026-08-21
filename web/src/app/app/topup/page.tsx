@@ -123,7 +123,7 @@ export default function TopupPage() {
       )}
 
       {phase === 'paid' && (
-        <p className="text-lg">Top-up Rp{amount.toLocaleString('id-ID')} berhasil ✅</p>
+        <p className="text-lg">Top-up Rp{amount.toLocaleString('id-ID')} berhasil.</p>
       )}
     </main>
   );

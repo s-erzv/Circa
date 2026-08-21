@@ -110,7 +110,7 @@ bot.command('start', async (ctx) => {
     };
     const route = poolId ? routes[kind] : undefined;
     if (route) {
-      await ctx.reply('Lanjut di sini ya 👇', {
+      await ctx.reply('Lanjut di sini ya:', {
         reply_markup: openAppKeyboard(route.label, route.path),
       });
       return;
@@ -123,7 +123,7 @@ bot.command('start', async (ctx) => {
   // signed on-chain action a member takes (joining an arisan they've
   // decided to commit to, or their first setoran).
   await ctx.reply(
-    `Halo @${username || 'teman'}! 👋\n\n` +
+    `Halo @${username || 'teman'}!\n\n` +
       `Circa itu arisan bareng temen-temen, tapi uangnya nggak dipegang ` +
       `satu orang — dipegang kontrak yang aturannya udah disepakati di awal ` +
       `dan nggak bisa diubah diam-diam.\n\n` +
@@ -153,7 +153,7 @@ bot.on('my_chat_member', async (ctx) => {
 
   await ctx.api.sendMessage(
     update.chat.id,
-    `Halo semua! 👋 Aku Circa, bakal jadi pemandu arisan di grup ini.\n\n` +
+    `Halo semua! Aku Circa, bakal jadi pemandu arisan di grup ini.\n\n` +
       `Uang arisan nggak dipegang satu orang — dipegang kontrak yang aturannya ` +
       `disepakati di awal dan nggak bisa diubah diam-diam. Kocokan, giliran, ` +
       `sampai keputusan keluarin/skip anggota semuanya tercatat, bukan kata mulut.\n\n` +
@@ -407,7 +407,7 @@ bot.command('mulai', async (ctx) => {
 
   const user = await ensureUser(telegramId, ctx.from?.username || '');
   if (!user) {
-    await ctx.reply('Waduh, aku gagal nyimpen datamu. Coba lagi bentar ya 🙏');
+    await ctx.reply('Waduh, aku gagal nyimpen datamu. Coba lagi bentar ya');
     return;
   }
 
@@ -443,16 +443,16 @@ bot.command('saldo', async (ctx) => {
 
   const tokenAddress = process.env.IDRT_TOKEN_ADDRESS;
   if (!tokenAddress) {
-    await ctx.reply('Waduh, lagi ada masalah di server. Coba lagi bentar ya 🙏');
+    await ctx.reply('Waduh, lagi ada masalah di server. Coba lagi bentar ya');
     return;
   }
 
   try {
     const balance = await getTokenBalance(tokenAddress, userRow.wallet_address);
-    await ctx.reply(`💰 Saldo dompetmu: Rp${balance.toLocaleString('id-ID')}`);
+    await ctx.reply(`Saldo dompetmu: Rp${balance.toLocaleString('id-ID')}`);
   } catch (err) {
     console.error('failed to read wallet balance:', err);
-    await ctx.reply('Gagal ngecek saldo. Coba lagi bentar ya 🙏');
+    await ctx.reply('Gagal ngecek saldo. Coba lagi bentar ya');
   }
 });
 
@@ -486,14 +486,14 @@ bot.command('saldopool', async (ctx) => {
     const paidThisCycle = memberStates.filter((m) => m.contributed_this_cycle).length;
 
     await ctx.reply(
-      `💰 Saldo "${pool.name}":\n` +
+      `Saldo "${pool.name}":\n` +
         `• Terkumpul siklus ini: Rp${onChain.cycle_pot.toLocaleString('id-ID')}\n` +
         `• Cadangan (reserve): Rp${onChain.reserve_balance.toLocaleString('id-ID')}\n` +
         `• Udah setor siklus ini: ${paidThisCycle}/${members.length} anggota`,
     );
   } catch (err) {
     console.error('failed to read pool balance:', err);
-    await ctx.reply('Gagal ngecek saldo pool. Coba lagi bentar ya 🙏');
+    await ctx.reply('Gagal ngecek saldo pool. Coba lagi bentar ya');
   }
 });
 
@@ -541,11 +541,11 @@ async function showConfirmSummary(
       `• Setoran Rp${next.contributionAmount.toLocaleString('id-ID')} / siklus\n` +
       `• Tiap ${cycleDays} hari, batas kumpul ${deadlineDays} hari sebelum telat\n\n` +
       `Proyeksi jadwal (siapa dapet giliran baru ketauan pas kocokan — ini baru perkiraan tanggalnya):\n${schedule}\n\n` +
-      `⚠️ Testnet: token uji, belum Rupiah beneran.\n\nUdah pas?`,
+      `Testnet: token uji, belum Rupiah beneran.\n\nUdah pas?`,
     {
       reply_markup: new InlineKeyboard()
-        .text('✅ Ya, buat drafnya', 'draftok')
-        .text('✏️ Ulang dari awal', 'draftredo'),
+        .text('Ya, buat drafnya', 'draftok')
+        .text('Ulang dari awal', 'draftredo'),
     },
   );
 }
@@ -629,7 +629,7 @@ async function handleDraftStep(
     }
   } catch (error) {
     console.error('Draft step failed:', error);
-    await ctx.reply('Waduh, otak AI ku lagi ngelag nih 😵 Coba /mulai lagi ya.');
+    await ctx.reply('Waduh, otak AI ku lagi ngelag nih. Coba /mulai lagi ya.');
   }
 }
 
@@ -750,7 +750,7 @@ async function handleGeneralMessage(ctx: {
     if (reply) await ctx.reply(reply);
   } catch (error) {
     console.error('Groq AI Error:', error);
-    await ctx.reply('Waduh, otak AI ku lagi ngelag nih 😵 Coba lagi nanti ya.');
+    await ctx.reply('Waduh, otak AI ku lagi ngelag nih. Coba lagi nanti ya.');
   }
 }
 
@@ -777,7 +777,7 @@ bot.callbackQuery(/^gabung:(.+)$/, async (ctx) => {
   await ensureUser(telegramId, ctx.from.username || '');
 
   if (await isInterested(poolId, telegramId)) {
-    await ctx.answerCallbackQuery({ text: 'Kamu udah tercatat kok, tinggal tunggu slot penuh ya 🙌' });
+    await ctx.answerCallbackQuery({ text: 'Kamu udah tercatat kok, tinggal tunggu slot penuh ya' });
     return;
   }
 
@@ -786,7 +786,7 @@ bot.callbackQuery(/^gabung:(.+)$/, async (ctx) => {
   const count = await listInterestedCount(poolId);
   await ctx.answerCallbackQuery({ text: 'Sip, kamu tercatat mau ikut!' });
   await ctx.editMessageText(
-    `${ctx.callbackQuery.message?.text ?? ''}\n\n👥 ${count} orang tertarik ikut.`,
+    `${ctx.callbackQuery.message?.text ?? ''}\n\n${count} orang tertarik ikut.`,
     { reply_markup: ctx.callbackQuery.message?.reply_markup },
   ).catch(() => {});
 
@@ -799,7 +799,7 @@ bot.callbackQuery(/^gabung:(.+)$/, async (ctx) => {
   if (pool && count >= (pool.member_count ?? Infinity)) {
     await ctx.api.sendMessage(
       ctx.chat?.id ?? ctx.callbackQuery.message?.chat.id ?? '',
-      `Slot "${pool.name}" udah penuh peminat! 🎉\n\n` +
+      `Slot "${pool.name}" udah penuh peminat!\n\n` +
         `Yang tadi tap "Gabung", buka tombol di bawah buat resmi gabung — ` +
         `bakal diminta FaceID/sidik jari sekali buat tanda tangan.`,
       { reply_markup: deepLinkKeyboard('Gabung Resmi', `join_${poolId}`) },

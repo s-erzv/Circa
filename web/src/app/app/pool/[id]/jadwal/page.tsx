@@ -51,7 +51,7 @@ export default function PoolJadwalPage({ params }: { params: Promise<{ id: strin
       {data && (
         <>
           <p className="text-xs opacity-60">
-            ⚠️ Proyeksi, bukan janji pasti — bisa geser kalau ada yang di-skip, keluar,
+            Proyeksi, bukan janji pasti — bisa geser kalau ada yang di-skip, keluar,
             atau dikeluarkan lewat voting. Siklus berjalan sekarang: {data.currentCycle + 1}.
           </p>
           <ul className="flex flex-col gap-2">

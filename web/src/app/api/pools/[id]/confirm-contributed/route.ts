@@ -44,7 +44,7 @@ export async function POST(
       await bot.api
         .sendMessage(
           pool.telegram_chat_id,
-          `💰 ${label} udah setor buat siklus ke-${onChain.current_cycle}.\n` +
+          `${label} udah setor buat siklus ke-${onChain.current_cycle}.\n` +
             `Terkumpul: Rp${onChain.cycle_pot.toLocaleString('id-ID')} / Rp${target.toLocaleString('id-ID')}`,
         )
         .catch((err) => console.error('failed to announce contribution:', err));

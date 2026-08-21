@@ -20,6 +20,7 @@ export async function deployPoolContract(): Promise<string> {
 export type PoolDraftTerms = {
   organizer: string;
   token: string;
+  gateway: string;
   contributionAmount: string;
   memberCount: number;
   cycleLengthSecs: number;
@@ -44,6 +45,7 @@ export async function prepareCreatePool(
     poolId,
     organizer: terms.organizer,
     token: terms.token,
+    gateway: terms.gateway,
     contributionAmount: terms.contributionAmount,
     memberCount: terms.memberCount,
     cycleLengthSecs: terms.cycleLengthSecs,

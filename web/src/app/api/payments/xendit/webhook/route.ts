@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { verifyWebhookToken, type XenditQrPaymentWebhook } from '@/lib/payments/xendit';
 import { mintIdrt } from '@/lib/payments/mint';
+import { runContributeViaGateway } from '@/lib/soroban/cycle';
+import { getPool as getOnChainPool } from '@/lib/soroban/read';
+import { getPool as getPoolRow } from '@/lib/pools';
 import { bot } from '@/lib/bot';
 
 /**
@@ -73,24 +76,58 @@ export async function POST(request: Request) {
   }
 
   try {
-    await mintIdrt(claimed.wallet_address, claimed.amount);
-    await supabase
-      .from('payment_intents')
-      .update({ minted_at: new Date().toISOString() })
-      .eq('id', claimed.id);
+    if (claimed.pool_id) {
+      // A pool's setoran, paid straight through the gateway: no separate
+      // top-up, no member signature — see contribute_via_gateway's doc
+      // comment in cycle.rs for why a deposit doesn't need one.
+      const pool = await getPoolRow(claimed.pool_id);
+      if (!pool?.contract_id) {
+        throw new Error(`pool ${claimed.pool_id} has no contract_id`);
+      }
+      await runContributeViaGateway(pool.contract_id, claimed.wallet_address);
+      await supabase
+        .from('payment_intents')
+        .update({ minted_at: new Date().toISOString() })
+        .eq('id', claimed.id);
 
-    await bot.api
-      .sendMessage(
-        claimed.telegram_id,
-        `✅ Top-up Rp${claimed.amount.toLocaleString('id-ID')} berhasil masuk ke dompetmu.`,
-      )
-      .catch((err) => console.error('failed to notify top-up success:', err));
+      if (pool.telegram_chat_id) {
+        const { data: userRow } = await supabase
+          .from('users')
+          .select('telegram_username')
+          .eq('telegram_id', claimed.telegram_id)
+          .maybeSingle();
+        const onChain = await getOnChainPool(pool.contract_id);
+        const label = userRow?.telegram_username ? `@${userRow.telegram_username}` : 'Seseorang';
+        const target = (pool.contribution_amount ?? 0) * (pool.member_count ?? 0);
+
+        await bot.api
+          .sendMessage(
+            pool.telegram_chat_id,
+            `${label} udah setor buat siklus ke-${onChain.current_cycle}.\n` +
+              `Terkumpul: Rp${onChain.cycle_pot.toLocaleString('id-ID')} / Rp${target.toLocaleString('id-ID')}`,
+          )
+          .catch((err) => console.error('failed to announce gateway contribution:', err));
+      }
+    } else {
+      await mintIdrt(claimed.wallet_address, claimed.amount);
+      await supabase
+        .from('payment_intents')
+        .update({ minted_at: new Date().toISOString() })
+        .eq('id', claimed.id);
+
+      await bot.api
+        .sendMessage(
+          claimed.telegram_id,
+          `Top-up Rp${claimed.amount.toLocaleString('id-ID')} berhasil masuk ke dompetmu.`,
+        )
+        .catch((err) => console.error('failed to notify top-up success:', err));
+    }
   } catch (err) {
-    // The payment is real and already marked 'paid' — a minting failure
-    // here is an operational problem to fix (retry, manual mint), not a
-    // reason to tell Xendit to retry the webhook, which would just repeat
-    // the same failure.
-    console.error(`mint failed for intent ${claimed.id}:`, err);
+    // The payment is real and already marked 'paid' — a failure here is an
+    // operational problem to fix (retry, manual credit), not a reason to
+    // tell Xendit to retry the webhook, which would just repeat the same
+    // failure.
+    console.error(`credit failed for intent ${claimed.id}:`, err);
   }
 
   return NextResponse.json({ ok: true });

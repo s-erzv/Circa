@@ -122,7 +122,7 @@ async function tickPool(
       if (pool.telegram_chat_id) {
         await bot.api.sendMessage(
           pool.telegram_chat_id,
-          `💸 Giliran "${pool.name}" cair! Kali ini ke ${label}.`,
+          `Giliran "${pool.name}" cair! Kali ini ke ${label}.`,
         );
       }
 
@@ -132,7 +132,7 @@ async function tickPool(
         if (pool.telegram_chat_id) {
           await bot.api.sendMessage(
             pool.telegram_chat_id,
-            `🎉 Arisan "${pool.name}" udah selesai — semua kebagian giliran. Makasih udah ikut!`,
+            `Arisan "${pool.name}" udah selesai — semua kebagian giliran. Makasih udah ikut!`,
           );
         }
       }

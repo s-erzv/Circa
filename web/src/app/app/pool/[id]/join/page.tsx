@@ -189,7 +189,7 @@ export default function PoolJoinPage({ params }: { params: Promise<{ id: string 
         <p className="text-sm opacity-60">Lagi gabungin kamu ke arisan… jangan tutup dulu ya.</p>
       )}
 
-      {phase === 'done' && <p className="text-lg">Kamu resmi gabung ✅ Balik ke grup ya.</p>}
+      {phase === 'done' && <p className="text-lg">Kamu resmi gabung. Balik ke grup ya.</p>}
     </main>
   );
 }

@@ -1,5 +1,5 @@
 import { Address } from '@stellar/stellar-sdk';
-import { callPermissionless, prepareRelay, type PreparedRelay } from './tx-relay';
+import { callAsIssuer, callPermissionless, prepareRelay, type PreparedRelay } from './tx-relay';
 import { getMember, getPool, listPoolMembers } from './read';
 
 /** Prepares a member-signed `contribute()` call — reuses the same
@@ -49,6 +49,22 @@ export async function runDistribute(poolId: string): Promise<DistributeResult> {
     netPayout: null,
     hash: result.hash,
   };
+}
+
+/**
+ * Records a QRIS-paid contribution — called after the payment webhook
+ * confirms real money moved, never from a client request. No member
+ * signature is involved: `contribute_via_gateway` on the contract requires
+ * the issuer's own auth instead (see its doc comment in cycle.rs), which
+ * `callAsIssuer` satisfies directly with the held issuer keypair.
+ */
+export async function runContributeViaGateway(poolId: string, member: string): Promise<void> {
+  const result = await callAsIssuer(poolId, 'contribute_via_gateway', [
+    new Address(member).toScVal(),
+  ]);
+  if (result.status !== 'SUCCESS') {
+    throw new Error(`contribute_via_gateway failed: ${result.hash}`);
+  }
 }
 
 /** Flags a member who missed their contribution deadline. Also

@@ -53,7 +53,7 @@ export default function AppHome() {
       <header>
         <p className="text-sm opacity-60">Halo,</p>
         <h1 className="text-2xl font-semibold">
-          {user?.firstName || user?.username || 'teman'} 👋
+          {user?.firstName || user?.username || 'teman'}
         </h1>
       </header>
 
@@ -75,7 +75,7 @@ export default function AppHome() {
 
       {status?.hasWallet && (
         <section className="rounded-xl border border-black/10 p-4 text-sm dark:border-white/15">
-          <p className="font-medium">Dompet kamu aktif ✅</p>
+          <p className="font-medium">Dompet kamu aktif</p>
           <p className="mt-1 break-all font-mono text-xs opacity-60">
             {status.walletAddress}
           </p>

@@ -44,11 +44,11 @@ export async function POST(
   await supabase.from('pools').update({ status: 'forming' }).eq('id', id);
 
   if (pool.telegram_chat_id) {
-    const keyboard = new InlineKeyboard().text('Gabung 🙋', `gabung:${pool.id}`);
+    const keyboard = new InlineKeyboard().text('Gabung', `gabung:${pool.id}`);
     await bot.api
       .sendMessage(
         pool.telegram_chat_id,
-        `Arisan "${pool.name}" udah resmi jadi kontrak on-chain! ✅\n\n` +
+        `Arisan "${pool.name}" udah resmi jadi kontrak on-chain!\n\n` +
           `${pool.member_count} slot tersedia. Yuk siapa yang mau ikut, tap tombol di bawah.`,
         { reply_markup: keyboard },
       )
