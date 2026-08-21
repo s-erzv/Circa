@@ -434,16 +434,35 @@ bot.callbackQuery('draftok', async (ctx) => {
   // contribution rather than another interview question — these are
   // recovery-mechanism tuning, not something a first-time organizer has an
   // informed opinion on yet.
-  const pool = await createDraftPool(user.id, telegramId, chatId, {
-    name: state.name,
-    memberCount: state.memberCount,
-    contributionAmount: state.contributionAmount,
-    cycleLengthSecs: state.cycleLengthSecs,
-    deadlineOffsetSecs: state.deadlineOffsetSecs,
-    penaltyAmount: Math.round(state.contributionAmount * 0.05),
-    exitPenaltyAmount: Math.round(state.contributionAmount * 0.025),
-    reserveBps: 100,
-  });
+  let pool;
+  try {
+    pool = await createDraftPool(user.id, telegramId, chatId, {
+      name: state.name,
+      memberCount: state.memberCount,
+      contributionAmount: state.contributionAmount,
+      cycleLengthSecs: state.cycleLengthSecs,
+      deadlineOffsetSecs: state.deadlineOffsetSecs,
+      penaltyAmount: Math.round(state.contributionAmount * 0.05),
+      exitPenaltyAmount: Math.round(state.contributionAmount * 0.025),
+      reserveBps: 100,
+    });
+  } catch (error) {
+    console.error('createDraftPool failed:', error);
+    // pools_one_live_per_chat (migration 004): the DB enforces one live
+    // (non-closed) pool per group, and that's the one failure mode worth a
+    // specific, actionable message rather than a generic "something broke".
+    const message = String(error);
+    if (message.includes('pools_one_live_per_chat')) {
+      await ctx.reply(
+        'Grup ini masih punya arisan yang belum kelar (draf lama yang belum ' +
+          'dikonfirmasi, atau yang lagi jalan). Kelarin/tutup itu dulu sebelum ' +
+          'bikin arisan baru di grup yang sama.',
+      );
+    } else {
+      await ctx.reply('Waduh, gagal nyimpen draf arisannya. Coba /mulai lagi ya.');
+    }
+    return;
+  }
 
   await ctx
     .editMessageText(`Draf "${state.name}" udah dicatat! Belum ada yang dibikin on-chain.`)
