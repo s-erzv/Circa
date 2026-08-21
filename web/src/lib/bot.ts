@@ -199,17 +199,39 @@ function projectScheduleDates(memberCount: number, cycleLengthSecs: number): str
   return dates;
 }
 
-async function extractBasicTerms(
-  userMessage: string,
-): Promise<{ name: string; memberCount: number; contributionAmount: number } | null> {
+type BasicTerms = {
+  name: string;
+  memberCount: number;
+  contributionAmount: number;
+  /** Present only if the user already volunteered it in the same message —
+   *  e.g. "arisan iseng, 2 orang, 500rb, per 5 hari, batasnya 1 hari" says
+   *  everything at once. null means "not mentioned", not "invalid". */
+  cycleDays: number | null;
+  deadlineDays: number | null;
+};
+
+/**
+ * Extracts every field the interview eventually needs from ONE message,
+ * not just the first three. A real conversation doesn't reliably arrive in
+ * the exact order the interview asks for it — someone who says "2 orang,
+ * 500rb, per 5 hari, batas 1 hari" in one go has already answered every
+ * step, and re-asking what they just said reads as the bot not listening.
+ * The step logic (handleDraftStep) is what decides which of these to keep
+ * asking for; this function's only job is to not miss anything that was
+ * already said.
+ */
+async function extractAllTerms(userMessage: string): Promise<BasicTerms | null> {
   const response = await groq.chat.completions.create({
     model: 'openai/gpt-oss-120b',
     messages: [
       {
         role: 'system',
         content:
-          'Ekstrak nama arisan, jumlah anggota, dan nominal setoran per orang per siklus ' +
-          '(dalam Rupiah) dari pesan user pakai fungsi draft_pool.',
+          'Ekstrak detail arisan dari pesan user pakai fungsi draft_pool. Wajib: nama, ' +
+          'jumlah anggota, nominal setoran per orang (Rupiah). Opsional, isi HANYA kalau ' +
+          'disebutin user: cycle_days (siklus setoran dalam hari — "sebulan"=30, ' +
+          '"2 minggu"=14, "seminggu"=7, "per 5 hari"=5) dan deadline_days (batas telat ' +
+          'dalam hari — "batasnya 1 hari"=1).',
       },
       { role: 'user', content: userMessage },
     ],
@@ -218,7 +240,7 @@ async function extractBasicTerms(
         type: 'function',
         function: {
           name: 'draft_pool',
-          description: 'Detail dasar arisan',
+          description: 'Detail arisan yang disebutkan user',
           parameters: {
             type: 'object',
             properties: {
@@ -227,6 +249,14 @@ async function extractBasicTerms(
               contribution_amount: {
                 type: 'integer',
                 description: 'Nominal setoran per orang per siklus, dalam Rupiah',
+              },
+              cycle_days: {
+                type: 'integer',
+                description: 'Panjang satu siklus setoran dalam hari, HANYA kalau disebutin',
+              },
+              deadline_days: {
+                type: 'integer',
+                description: 'Batas hari sebelum dianggap telat, HANYA kalau disebutin',
               },
             },
             required: ['name'],
@@ -242,16 +272,78 @@ async function extractBasicTerms(
   const args = JSON.parse(toolCall.function.arguments);
   if (!args.name) return null;
 
+  const cycleDays = Number(args.cycle_days);
+  const deadlineDays = Number(args.deadline_days);
+
   return {
     name: String(args.name),
     memberCount: Math.max(2, Number(args.member_count) || 10),
     contributionAmount: Math.max(1, Number(args.contribution_amount) || 100000),
+    cycleDays: Number.isFinite(cycleDays) && cycleDays > 0 ? cycleDays : null,
+    deadlineDays: Number.isFinite(deadlineDays) && deadlineDays > 0 ? deadlineDays : null,
+  };
+}
+
+/**
+ * Like `extractAllTerms`, but for the 'frequency' step's answer, which has
+ * no reason to mention a name (already collected) — reusing
+ * `extractAllTerms` there would force the model to invent one, since its
+ * schema requires it. Pulls cycle_days (what was actually asked) and,
+ * opportunistically, deadline_days if the user answered both questions at
+ * once ("5 hari, batasnya 1 hari").
+ */
+async function extractCycleAndDeadline(
+  userMessage: string,
+): Promise<{ cycleDays: number | null; deadlineDays: number | null }> {
+  const response = await groq.chat.completions.create({
+    model: 'openai/gpt-oss-120b',
+    messages: [
+      {
+        role: 'system',
+        content:
+          'Ekstrak dari jawaban user pakai fungsi extract: cycle_days (siklus setoran ' +
+          'dalam hari — "sebulan"=30, "2 minggu"=14, "seminggu"=7, "5 hari"=5) — WAJIB. ' +
+          'deadline_days (batas telat dalam hari, misal "batasnya 1 hari"=1) — isi HANYA ' +
+          'kalau disebutin juga.',
+      },
+      { role: 'user', content: userMessage },
+    ],
+    tools: [
+      {
+        type: 'function',
+        function: {
+          name: 'extract',
+          description: 'Frekuensi siklus, dan batas telat kalau disebutin',
+          parameters: {
+            type: 'object',
+            properties: {
+              cycle_days: { type: 'integer', description: 'Panjang siklus dalam hari' },
+              deadline_days: {
+                type: 'integer',
+                description: 'Batas hari sebelum telat, HANYA kalau disebutin',
+              },
+            },
+            required: ['cycle_days'],
+          },
+        },
+      },
+    ],
+    tool_choice: 'required',
+  });
+
+  const toolCall = response.choices[0].message.tool_calls?.[0];
+  if (!toolCall || toolCall.type !== 'function') return { cycleDays: null, deadlineDays: null };
+  const args = JSON.parse(toolCall.function.arguments);
+  const cycleDays = Number(args.cycle_days);
+  const deadlineDays = Number(args.deadline_days);
+  return {
+    cycleDays: Number.isFinite(cycleDays) && cycleDays > 0 ? cycleDays : null,
+    deadlineDays: Number.isFinite(deadlineDays) && deadlineDays > 0 ? deadlineDays : null,
   };
 }
 
 /** Converts a free-form answer like "sebulan sekali" or "2 minggu" into a
- *  day count, for both the cycle-frequency and deadline-grace questions —
- *  same shape, different meaning, so one extractor serves both steps. */
+ *  day count, for the deadline-grace question. */
 async function extractDays(userMessage: string, description: string): Promise<number | null> {
   const response = await groq.chat.completions.create({
     model: 'openai/gpt-oss-120b',
@@ -334,6 +426,44 @@ bot.on('message:text', async (ctx) => {
   await handleGeneralMessage(ctx);
 });
 
+/** Clamps a requested grace period to fit inside its own cycle — "kasih
+ *  waktu sebulan" for a 7-day cycle is a real answer, just one that needs
+ *  capping to make sense — then shows the final summary + confirm buttons.
+ *  Shared by every path that can reach a complete draft, whether that took
+ *  one message or three. */
+async function showConfirmSummary(
+  ctx: { reply: (text: string, extra?: Record<string, unknown>) => Promise<unknown> },
+  key: string,
+  basics: { name: string; memberCount: number; contributionAmount: number },
+  cycleDays: number,
+  rawDeadlineDays: number | null,
+) {
+  const deadlineDays = Math.max(1, Math.min(rawDeadlineDays ?? 3, cycleDays - 1 || 1));
+  const next = {
+    step: 'confirm' as const,
+    ...basics,
+    cycleLengthSecs: cycleDays * 86400,
+    deadlineOffsetSecs: deadlineDays * 86400,
+  };
+  draftStates.set(key, next);
+
+  const schedule = projectScheduleDates(next.memberCount, next.cycleLengthSecs).join('\n');
+
+  await ctx.reply(
+    `Ringkasan "${next.name}":\n` +
+      `• ${next.memberCount} anggota\n` +
+      `• Setoran Rp${next.contributionAmount.toLocaleString('id-ID')} / siklus\n` +
+      `• Tiap ${cycleDays} hari, batas kumpul ${deadlineDays} hari sebelum telat\n\n` +
+      `Proyeksi jadwal (siapa dapet giliran baru ketauan pas kocokan — ini baru perkiraan tanggalnya):\n${schedule}\n\n` +
+      `⚠️ Testnet: token uji, belum Rupiah beneran.\n\nUdah pas?`,
+    {
+      reply_markup: new InlineKeyboard()
+        .text('✅ Ya, buat drafnya', 'draftok')
+        .text('✏️ Ulang dari awal', 'draftredo'),
+    },
+  );
+}
+
 async function handleDraftStep(
   userMessage: string,
   ctx: { reply: (text: string, extra?: Record<string, unknown>) => Promise<unknown> },
@@ -342,7 +472,7 @@ async function handleDraftStep(
 ) {
   try {
     if (state.step === 'basic') {
-      const parsed = await extractBasicTerms(userMessage);
+      const parsed = await extractAllTerms(userMessage);
       if (!parsed) {
         await ctx.reply(
           'Hmm, belum ketangkep. Coba sebutin nama arisan, jumlah anggota, sama ' +
@@ -350,24 +480,56 @@ async function handleDraftStep(
         );
         return;
       }
-      draftStates.set(key, { step: 'frequency', ...parsed });
+      const basics = {
+        name: parsed.name,
+        memberCount: parsed.memberCount,
+        contributionAmount: parsed.contributionAmount,
+      };
+
+      // Said everything in one go — don't re-ask what's already answered.
+      if (parsed.cycleDays) {
+        if (parsed.deadlineDays) {
+          await showConfirmSummary(ctx, key, basics, parsed.cycleDays, parsed.deadlineDays);
+          return;
+        }
+        draftStates.set(key, {
+          step: 'deadline',
+          ...basics,
+          cycleLengthSecs: parsed.cycleDays * 86400,
+        });
+        await ctx.reply(
+          `Oke, "${basics.name}" — ${basics.memberCount} orang, ` +
+            `Rp${basics.contributionAmount.toLocaleString('id-ID')} per orang, tiap ${parsed.cycleDays} hari.\n\n` +
+            'Dikasih waktu berapa hari buat kumpulin sebelum dianggap telat? (biasanya 2-3 hari)',
+        );
+        return;
+      }
+
+      draftStates.set(key, { step: 'frequency', ...basics });
       await ctx.reply(
-        `Oke, "${parsed.name}" — ${parsed.memberCount} orang, ` +
-          `Rp${parsed.contributionAmount.toLocaleString('id-ID')} per orang.\n\n` +
+        `Oke, "${basics.name}" — ${basics.memberCount} orang, ` +
+          `Rp${basics.contributionAmount.toLocaleString('id-ID')} per orang.\n\n` +
           'Setorannya tiap berapa lama? (misal: "sebulan sekali", "2 minggu sekali", "tiap 10 hari")',
       );
       return;
     }
 
     if (state.step === 'frequency') {
-      const days = await extractDays(userMessage, 'Jumlah hari per satu siklus setoran');
-      if (!days) {
+      // Also check for a deadline mentioned in this SAME answer ("5 hari,
+      // batasnya 1 hari") — the same "don't re-ask what's already said"
+      // reasoning as the basic step, just one step later.
+      const { cycleDays, deadlineDays } = await extractCycleAndDeadline(userMessage);
+      if (!cycleDays) {
         await ctx.reply('Sori, belum ketangkep. Coba sebutin dalam hari/minggu/bulan ya, misal "sebulan sekali".');
         return;
       }
-      draftStates.set(key, { ...state, step: 'deadline', cycleLengthSecs: days * 86400 });
+      if (deadlineDays) {
+        await showConfirmSummary(ctx, key, state, cycleDays, deadlineDays);
+        return;
+      }
+      draftStates.set(key, { ...state, step: 'deadline', cycleLengthSecs: cycleDays * 86400 });
       await ctx.reply(
-        `Oke, tiap ${days} hari.\n\n` +
+        `Oke, tiap ${cycleDays} hari.\n\n` +
           'Dikasih waktu berapa hari buat kumpulin sebelum dianggap telat? (biasanya 2-3 hari)',
       );
       return;
@@ -376,33 +538,7 @@ async function handleDraftStep(
     if (state.step === 'deadline') {
       const cycleDays = state.cycleLengthSecs / 86400;
       const rawDays = await extractDays(userMessage, 'Jumlah hari batas toleransi sebelum telat');
-      // Grace period has to fit inside the cycle it belongs to — clamped
-      // rather than rejected, since "kasih waktu sebulan" for a 7-day
-      // cycle is a real answer, just one that needs capping to make sense.
-      const days = Math.max(1, Math.min(rawDays ?? 3, cycleDays - 1 || 1));
-
-      const next = {
-        ...state,
-        step: 'confirm' as const,
-        deadlineOffsetSecs: days * 86400,
-      };
-      draftStates.set(key, next);
-
-      const schedule = projectScheduleDates(next.memberCount, next.cycleLengthSecs).join('\n');
-
-      await ctx.reply(
-        `Ringkasan "${next.name}":\n` +
-          `• ${next.memberCount} anggota\n` +
-          `• Setoran Rp${next.contributionAmount.toLocaleString('id-ID')} / siklus\n` +
-          `• Tiap ${cycleDays} hari, batas kumpul ${days} hari sebelum telat\n\n` +
-          `Proyeksi jadwal (siapa dapet giliran baru ketauan pas kocokan — ini baru perkiraan tanggalnya):\n${schedule}\n\n` +
-          `⚠️ Testnet: token uji, belum Rupiah beneran.\n\nUdah pas?`,
-        {
-          reply_markup: new InlineKeyboard()
-            .text('✅ Ya, buat drafnya', 'draftok')
-            .text('✏️ Ulang dari awal', 'draftredo'),
-        },
-      );
+      await showConfirmSummary(ctx, key, state, cycleDays, rawDays);
       return;
     }
   } catch (error) {
