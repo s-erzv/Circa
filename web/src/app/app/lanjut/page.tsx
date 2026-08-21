@@ -4,7 +4,95 @@ import { Suspense, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { startRegistration } from '@simplewebauthn/browser';
 
-type Phase = 'redeeming' | 'ready' | 'creating' | 'done' | 'error';
+type Phase = 'redeeming' | 'ready' | 'creating' | 'continuing' | 'done' | 'error';
+
+type ActionKind = 'confirm' | 'join' | 'setor' | 'jadwal';
+type NextAction = { kind: ActionKind; poolId: string };
+
+const BOT_USERNAME = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || 'circagram_bot';
+
+/** Mirrors bot.ts's own `<kind>_<poolId>` payload parsing for `/start`. */
+function parseNext(next: string | null): NextAction | null {
+  if (!next) return null;
+  const [kind, poolId] = next.split('_');
+  if (!poolId) return null;
+  if (kind !== 'confirm' && kind !== 'join' && kind !== 'setor' && kind !== 'jadwal') {
+    return null;
+  }
+  return { kind, poolId };
+}
+
+const continuingLabel: Record<ActionKind, string> = {
+  confirm: 'Lagi bikin kontrak arisan…',
+  join: 'Lagi nyelesain gabung kamu…',
+  setor: 'Lagi proses setoran…',
+  jadwal: 'Sebentar…',
+};
+
+const doneLabel: Record<ActionKind, string> = {
+  confirm: 'Arisan ini udah jadi ✅',
+  join: 'Kamu resmi gabung ✅',
+  setor: 'Setoran berhasil ✅',
+  jadwal: 'Dompet kamu udah jadi ✅',
+};
+
+/**
+ * `apiFetch` refuses every request outside Telegram (by design — see
+ * api-client.ts). This page runs OUTSIDE Telegram on purpose, so it talks
+ * to the API directly; the handoff session cookie is what `requireUser`
+ * accepts here instead of initData.
+ */
+async function rawFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers);
+  if (init.body && !headers.has('content-type')) {
+    headers.set('content-type', 'application/json');
+  }
+  const res = await fetch(path, { ...init, headers });
+  let payload: unknown;
+  try {
+    payload = await res.json();
+  } catch {
+    payload = undefined;
+  }
+  if (!res.ok) {
+    const message =
+      (payload as { error?: string } | undefined)?.error ?? 'Ada yang error. Coba lagi bentar lagi ya.';
+    throw new Error(message);
+  }
+  return payload as T;
+}
+
+type PreparedRelay = {
+  relayId: string;
+  authEntryXdr: string;
+  validUntilLedgerSeq: number;
+  networkPassphrase: string;
+};
+
+/**
+ * Signs and submits one already-prepared relay, sharing the exact
+ * prepare→sign→submit sequence relay-client.ts uses inside Telegram — this
+ * page just can't call that module directly since it's built on `apiFetch`.
+ */
+async function signAndSubmit(prepared: PreparedRelay, credentialId: string): Promise<void> {
+  const { xdr } = await import('@stellar/stellar-sdk');
+  const { signSorobanAuthEntry } = await import('@/lib/soroban/passkey-auth');
+
+  const unsignedEntry = xdr.SorobanAuthorizationEntry.fromXDR(prepared.authEntryXdr, 'base64');
+  const signedEntry = await signSorobanAuthEntry(unsignedEntry, {
+    validUntilLedgerSeq: prepared.validUntilLedgerSeq,
+    networkPassphrase: prepared.networkPassphrase,
+    credentialId,
+  });
+
+  await rawFetch('/api/tx/submit', {
+    method: 'POST',
+    body: JSON.stringify({
+      relayId: prepared.relayId,
+      signedAuthEntryXdr: signedEntry.toXDR('base64'),
+    }),
+  });
+}
 
 /**
  * Landing page for the system-browser passkey fallback.
@@ -14,9 +102,11 @@ type Phase = 'redeeming' | 'ready' | 'creating' | 'done' | 'error';
  * short-lived httpOnly session cookie — after which the token is spent and
  * the URL is worthless if it leaks.
  *
- * It calls the WebAuthn endpoints directly rather than through `apiFetch`,
- * because `apiFetch` requires initData and would refuse every request here.
- * The cookie is the credential instead, and the server accepts either.
+ * Beyond just creating the wallet, it also finishes whatever the user was
+ * doing when Telegram's WebView blocked WebAuthn (join/setor/confirm) right
+ * here, in the same browser session — the passkey ceremony already forced a
+ * trip out of Telegram, so there is no reason to bounce the user back in
+ * just to tap one more button that could be done automatically.
  */
 export default function LanjutPage() {
   // useSearchParams needs a Suspense boundary: without one the whole route
@@ -34,14 +124,13 @@ export default function LanjutPage() {
   );
 }
 
-const BOT_USERNAME = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || 'circagram_bot';
-
 function LanjutInner() {
   const params = useSearchParams();
   const token = params.get('t');
-  const next = params.get('next');
+  const action = parseNext(params.get('next'));
   const [phase, setPhase] = useState<Phase>('redeeming');
   const [error, setError] = useState<string | null>(null);
+  const [resultLabel, setResultLabel] = useState<string | null>(null);
   // The redeem token is single-use. React StrictMode double-invokes effects
   // in dev, which would otherwise fire this request twice and always show
   // the second (failing) response.
@@ -70,6 +159,57 @@ function LanjutInner() {
       });
   }, [token]);
 
+  /**
+   * Finishes the action the user was in the middle of when they got bounced
+   * here. A failure past this point still leaves the wallet created, so it
+   * falls through to 'done' with the error shown rather than back to
+   * 'ready' — retrying wallet creation would just hit "already active".
+   */
+  async function continueAction(next: NextAction) {
+    setPhase('continuing');
+    try {
+      const status = await rawFetch<{
+        hasWallet: boolean;
+        walletAddress: string | null;
+        credentialId: string | null;
+      }>('/api/wallet/status');
+      if (!status.hasWallet || !status.walletAddress || !status.credentialId) {
+        throw new Error('Dompet belum siap.');
+      }
+
+      if (next.kind === 'join' || next.kind === 'setor') {
+        const pool = await rawFetch<{ contractId: string | null }>(`/api/pools/${next.poolId}`);
+        if (!pool.contractId) throw new Error('Arisan ini belum siap.');
+
+        const prepared = await rawFetch<PreparedRelay>('/api/tx/prepare', {
+          method: 'POST',
+          body: JSON.stringify({
+            kind: next.kind === 'join' ? 'pool_join' : 'pool_contribute',
+            poolId: pool.contractId,
+            member: status.walletAddress,
+          }),
+        });
+        await signAndSubmit(prepared, status.credentialId);
+
+        if (next.kind === 'join') {
+          await rawFetch(`/api/pools/${next.poolId}/confirm-joined`, { method: 'POST' });
+        }
+      } else if (next.kind === 'confirm') {
+        const prepared = await rawFetch<PreparedRelay>(`/api/pools/${next.poolId}/deploy`, {
+          method: 'POST',
+        });
+        await signAndSubmit(prepared, status.credentialId);
+        await rawFetch(`/api/pools/${next.poolId}/confirm-created`, { method: 'POST' });
+      }
+
+      setResultLabel(doneLabel[next.kind]);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setPhase('done');
+    }
+  }
+
   async function onCreate() {
     setPhase('creating');
     setError(null);
@@ -89,7 +229,11 @@ function LanjutInner() {
       });
       if (!verifyRes.ok) throw new Error((await verifyRes.json()).error ?? 'gagal');
 
-      setPhase('done');
+      if (action && action.kind !== 'jadwal') {
+        await continueAction(action);
+      } else {
+        setPhase('done');
+      }
     } catch (e) {
       setError((e as Error).message);
       setPhase('ready');
@@ -127,14 +271,20 @@ function LanjutInner() {
         <p className="text-sm opacity-60">Lagi bikin dompet kamu…</p>
       )}
 
+      {phase === 'continuing' && (
+        <p className="text-sm opacity-60">{continuingLabel[action?.kind ?? 'jadwal']}</p>
+      )}
+
       {phase === 'done' && (
         <>
-          <p className="text-lg">Dompet kamu udah jadi ✅</p>
+          <p className="text-lg">{resultLabel ?? 'Dompet kamu udah jadi ✅'}</p>
           <p className="max-w-sm text-sm opacity-70">
-            Balik ke Telegram ya, lanjutin di sana.
+            {error
+              ? 'Dompetnya aman kok — tinggal balik ke Telegram buat coba lagi.'
+              : 'Balik ke Telegram ya, lanjutin di sana.'}
           </p>
           <a
-            href={`https://t.me/${BOT_USERNAME}${next ? `?start=${next}` : ''}`}
+            href={`https://t.me/${BOT_USERNAME}${params.get('next') ? `?start=${params.get('next')}` : ''}`}
             className="rounded-xl bg-foreground px-5 py-3 text-background font-medium"
           >
             Buka Telegram
