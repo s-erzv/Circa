@@ -2,7 +2,12 @@
 
 import { use, useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api-client';
-import { createPasskeyWallet, handOffToSystemBrowser, isPasskeySupported } from '@/lib/passkey';
+import {
+  createPasskeyWallet,
+  handOffToSystemBrowser,
+  isPasskeySupported,
+  isWebAuthnBlockedError,
+} from '@/lib/passkey';
 import { relayAction } from '@/lib/soroban/relay-client';
 import { initTelegramView, isInsideTelegram } from '@/lib/telegram-client';
 
@@ -71,6 +76,15 @@ export default function PoolSetorPage({ params }: { params: Promise<{ id: string
       await createPasskeyWallet();
       setPhase('ready');
     } catch (e) {
+      if (isWebAuthnBlockedError(e)) {
+        try {
+          await handOffToSystemBrowser();
+        } catch (handoffError) {
+          setError((handoffError as Error).message);
+          setPhase('needs-wallet');
+        }
+        return;
+      }
       setError((e as Error).message);
       setPhase('needs-wallet');
     }

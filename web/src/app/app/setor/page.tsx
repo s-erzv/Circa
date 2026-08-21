@@ -6,6 +6,7 @@ import {
   createPasskeyWallet,
   handOffToSystemBrowser,
   isPasskeySupported,
+  isWebAuthnBlockedError,
 } from '@/lib/passkey';
 import { initTelegramView, isInsideTelegram } from '@/lib/telegram-client';
 
@@ -62,6 +63,15 @@ export default function SetorPage() {
       await createPasskeyWallet();
       setPhase('ready-to-pay');
     } catch (e) {
+      if (isWebAuthnBlockedError(e)) {
+        try {
+          await handOffToSystemBrowser();
+        } catch (handoffError) {
+          setError((handoffError as Error).message);
+          setPhase('needs-wallet');
+        }
+        return;
+      }
       setError((e as Error).message);
       setPhase('needs-wallet');
     }

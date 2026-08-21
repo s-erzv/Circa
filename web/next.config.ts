@@ -16,6 +16,27 @@ const nextConfig: NextConfig = {
     '*.ngrok-free.dev',
     '*.ngrok.io',
   ],
+  // Declares that WE don't restrict WebAuthn for ourselves or same-origin
+  // embeds. This does NOT guarantee WebAuthn works inside Telegram's own
+  // iframe (Telegram Desktop/Web) — that delegation is controlled by the
+  // `allow` attribute on Telegram's OWN iframe embedding us, which is
+  // entirely their call, not something a header on our responses can
+  // override. Kept anyway as the correct default; the actual fix for the
+  // iframe case is the automatic system-browser fallback in passkey.ts
+  // (isWebAuthnBlockedError), which works regardless of this header.
+  async headers() {
+    return [
+      {
+        source: '/:path*',
+        headers: [
+          {
+            key: 'Permissions-Policy',
+            value: 'publickey-credentials-create=*, publickey-credentials-get=*',
+          },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

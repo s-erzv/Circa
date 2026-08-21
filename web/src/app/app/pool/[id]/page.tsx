@@ -2,7 +2,12 @@
 
 import { use, useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api-client';
-import { createPasskeyWallet, handOffToSystemBrowser, isPasskeySupported } from '@/lib/passkey';
+import {
+  createPasskeyWallet,
+  handOffToSystemBrowser,
+  isPasskeySupported,
+  isWebAuthnBlockedError,
+} from '@/lib/passkey';
 import { initTelegramView, isInsideTelegram } from '@/lib/telegram-client';
 
 type PoolInfo = {
@@ -73,6 +78,19 @@ export default function PoolConfirmPage({ params }: { params: Promise<{ id: stri
       await createPasskeyWallet();
       setPhase('ready');
     } catch (e) {
+      // WebAuthn exists (isPasskeySupported() passed) but this specific
+      // embedding context (Telegram Desktop/Web render the Mini App in an
+      // iframe) won't actually let it run — the runtime failure
+      // isPasskeySupported()'s static check can't see coming.
+      if (isWebAuthnBlockedError(e)) {
+        try {
+          await handOffToSystemBrowser();
+        } catch (handoffError) {
+          setError((handoffError as Error).message);
+          setPhase('needs-wallet');
+        }
+        return;
+      }
       setError((e as Error).message);
       setPhase('needs-wallet');
     }

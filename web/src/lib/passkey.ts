@@ -22,6 +22,29 @@ export function isPasskeySupported(): boolean {
 export type WalletCreated = { verified: true; contractId: string };
 
 /**
+ * Whether a thrown error means "WebAuthn exists per `isPasskeySupported()`,
+ * but this specific embedding context won't actually let it run" — the
+ * case `isPasskeySupported()` cannot catch in advance.
+ *
+ * Telegram Desktop and Telegram Web render the Mini App inside an iframe.
+ * Whether that iframe delegates the `publickey-credentials-create`
+ * Permissions-Policy is entirely Telegram's call (the `allow` attribute on
+ * *their* iframe embedding *us* — nothing on our side can grant it), so
+ * `navigator.credentials.create` throws instead of silently being absent.
+ * `isPasskeySupported()`'s feature-detection only checks that the API
+ * object exists, not that policy allows invoking it — this is the runtime
+ * check that catches what the static one structurally cannot.
+ */
+export function isWebAuthnBlockedError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.name === 'NotAllowedError' ||
+    /publickey-credentials-(create|get)/i.test(error.message) ||
+    /permissions policy/i.test(error.message)
+  );
+}
+
+/**
  * Runs the full ceremony: fetch a server-issued challenge, prompt for
  * FaceID/TouchID, and send the result back to be verified and bound.
  *
