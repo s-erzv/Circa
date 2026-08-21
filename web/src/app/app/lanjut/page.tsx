@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { startRegistration } from '@simplewebauthn/browser';
 
@@ -39,6 +39,10 @@ function LanjutInner() {
   const token = params.get('t');
   const [phase, setPhase] = useState<Phase>('redeeming');
   const [error, setError] = useState<string | null>(null);
+  // The redeem token is single-use. React StrictMode double-invokes effects
+  // in dev, which would otherwise fire this request twice and always show
+  // the second (failing) response.
+  const redeemed = useRef(false);
 
   useEffect(() => {
     if (!token) {
@@ -46,6 +50,8 @@ function LanjutInner() {
       setPhase('error');
       return;
     }
+    if (redeemed.current) return;
+    redeemed.current = true;
     fetch('/api/wallet/handoff/redeem', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
