@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "bot": "tsx --env-file=.env scripts/bot.ts",
+    "simulate-topup": "tsx --env-file=.env scripts/simulate-topup.ts",
     "test": "vitest run"
   },
   "dependencies": {

@@ -54,6 +54,31 @@ export async function createQrCode(params: {
   return res.json();
 }
 
+/**
+ * Test-mode-only: fakes a successful scan-and-pay for a QR code already
+ * created via `createQrCode`, triggering the same `qr.payment` webhook a
+ * real payment would. Xendit rejects this outside sandbox keys — there is
+ * no equivalent in live mode, by design.
+ */
+export async function simulateQrPayment(externalId: string, amountIdr: number): Promise<void> {
+  const res = await fetch(
+    `${XENDIT_BASE}/qr_codes/${encodeURIComponent(externalId)}/payments/simulate`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: authHeader(),
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: `amount=${amountIdr}`,
+    },
+  );
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Xendit simulateQrPayment failed (${res.status}): ${body}`);
+  }
+}
+
 export type XenditQrPaymentWebhook = {
   event: 'qr.payment';
   id: string;
