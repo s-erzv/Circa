@@ -116,8 +116,8 @@ export default function PoolSetorPage({ params }: { params: Promise<{ id: string
               Rp{pool.contributionAmount.toLocaleString('id-ID')}
             </p>
             <p className="mt-1 opacity-70">
-              Bayar pakai QRIS dari aplikasi apa aja yang udah kamu punya (GoPay,
-              m-banking, dll) — begitu lunas, langsung tercatat sebagai setoran
+              Bayar pakai apa aja yang udah kamu punya (transfer bank, GoPay, OVO,
+              DANA, QRIS, dll) — begitu lunas, langsung tercatat sebagai setoran
               kamu, nggak perlu tanda tangan apa-apa lagi.
             </p>
             <p className="mt-2 text-xs opacity-60">Testnet: token uji, belum Rupiah beneran.</p>

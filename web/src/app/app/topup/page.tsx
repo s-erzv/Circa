@@ -85,8 +85,8 @@ export default function TopupPage() {
       {phase === 'entering' && (
         <>
           <p className="text-sm opacity-70">
-            Bayar pakai QRIS dari aplikasi apa aja yang udah kamu punya (GoPay,
-            m-banking, dll) — saldonya masuk ke dompet Stellar kamu sendiri.
+            Bayar pakai apa aja yang udah kamu punya (transfer bank, GoPay, OVO,
+            DANA, QRIS, dll) — saldonya masuk ke dompet Stellar kamu sendiri.
           </p>
           <div className="grid grid-cols-2 gap-2">
             {QUICK_AMOUNTS.map((v) => (

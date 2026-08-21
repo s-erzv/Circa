@@ -87,8 +87,11 @@ export type XenditInvoice = {
 };
 
 /**
- * Creates a Xendit-hosted checkout page restricted to QRIS, returning
- * `invoice_url` to redirect the payer to.
+ * Creates a Xendit-hosted checkout page, returning `invoice_url` to
+ * redirect the payer to. No `payment_methods` restriction — the payer picks
+ * whatever they already have (bank transfer, e-wallet, QRIS, etc.); this
+ * bridge only cares that Xendit confirms a real payment happened, not which
+ * rail it came through.
  *
  * Chosen over the raw QR Codes API (`createQrCode` above) specifically for
  * how it reads to the payer: a self-rendered QR image inside our own Mini
@@ -111,7 +114,6 @@ export async function createInvoice(params: {
       external_id: params.externalId,
       amount: params.amountIdr,
       currency: 'IDR',
-      payment_methods: ['QRIS'],
       description: params.description,
     }),
   });
