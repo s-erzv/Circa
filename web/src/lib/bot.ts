@@ -1,6 +1,6 @@
 import { Bot, InlineKeyboard } from 'grammy';
 import { supabase } from './supabase';
-import { createDraftPool, listInterestedCount, markInterested } from './pools';
+import { createDraftPool, isInterested, listInterestedCount, markInterested } from './pools';
 import OpenAI from 'openai';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -673,6 +673,13 @@ async function handleGeneralMessage(ctx: {
  * Recorded as `interested`, not `joined` — the real on-chain join() still
  * needs the member's own passkey and happens in the Mini App.
  *
+ * The button itself can't be hidden per-person — it's one inline keyboard
+ * shared by everyone who sees the group message, so a second tap from the
+ * same person is always possible. What we control is what happens when
+ * that happens: re-registering interest is a harmless no-op already (see
+ * markInterested's upsert), but re-showing it as a fresh "you're in!" would
+ * read as broken bookkeeping. Recognize the repeat and say so instead.
+ *
  * Once enough members have tapped in to fill the roster, the bot invites
  * everyone to complete the real signed join — that step can't happen from
  * a callback button, since it needs a passkey ceremony no server-side
@@ -682,6 +689,12 @@ bot.callbackQuery(/^gabung:(.+)$/, async (ctx) => {
   const poolId = ctx.match[1];
   const telegramId = ctx.from.id.toString();
   await ensureUser(telegramId, ctx.from.username || '');
+
+  if (await isInterested(poolId, telegramId)) {
+    await ctx.answerCallbackQuery({ text: 'Kamu udah tercatat kok, tinggal tunggu slot penuh ya 🙌' });
+    return;
+  }
+
   await markInterested(poolId, telegramId);
 
   const count = await listInterestedCount(poolId);
