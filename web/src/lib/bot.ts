@@ -722,6 +722,58 @@ bot.callbackQuery('draftredo', async (ctx) => {
   );
 });
 
+const BASE_SYSTEM_PROMPT =
+  'Kamu adalah Circa, asisten arisan on-chain yang ramah dan gaul. ' +
+  'Gunakan bahasa Indonesia santai (aku/kamu atau gue/lu). ' +
+  'Kalau user mau bikin arisan baru, arahkan mereka ketik /mulai di grup arisannya — ' +
+  'jangan pernah membuat arisan sendiri dari percakapan biasa. ' +
+  'Fitur tersedia: /mulai (bikin arisan baru), /saldopool (cek kas), /tutup (organizer nutup arisan di tengah). ' +
+  'Anggota bisa minta tukar giliran lebih awal (Piauw) lewat Mini App dengan menawarkan kompensasi ke kas cadangan. ' +
+  'Dana arisan aman di kontrak blockchain — tidak dipegang satu orang pun.';
+
+const POOL_STATUS_LABELS: Record<string, string> = {
+  draft: 'masih draf, belum dikonfirmasi organizer',
+  deploying: 'lagi proses dibikin di blockchain',
+  forming: 'kontraknya udah jadi, masih nunggu slot kegabung penuh',
+  active: 'lagi jalan',
+  closed: 'udah selesai/ditutup',
+};
+
+/**
+ * Describes the group's own live pool (if any) for the system prompt, so
+ * the assistant can answer "siklus ini gimana", "udah berapa yang setor"
+ * etc. about THIS specific arisan instead of only generic feature
+ * explanations. Read-only and best-effort: any failure here just means the
+ * assistant answers without that context, not that the conversation fails.
+ */
+async function describeLivePoolForContext(chatId: string): Promise<string | null> {
+  const pool = await getLivePoolForChat(chatId);
+  if (!pool) return null;
+
+  const statusLabel = POOL_STATUS_LABELS[pool.status] ?? pool.status;
+  let line =
+    `Arisan aktif di grup ini: "${pool.name}", ${pool.member_count ?? '?'} anggota, ` +
+    `setoran Rp${(pool.contribution_amount ?? 0).toLocaleString('id-ID')}/siklus, status: ${statusLabel}.`;
+
+  if (pool.contract_id && (pool.status === 'active' || pool.status === 'forming')) {
+    try {
+      const onChain = await getPool(pool.contract_id);
+      if (pool.status === 'active') {
+        const deadline = new Date(Number(onChain.cycle_deadline) * 1000);
+        line +=
+          ` Lagi di siklus ke-${onChain.current_cycle + 1}, kas siklus ini Rp${onChain.cycle_pot.toLocaleString('id-ID')}, ` +
+          `deadline setor: ${deadline.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}.`;
+      } else {
+        line += ` Udah ${onChain.members.length}/${pool.member_count ?? '?'} orang gabung.`;
+      }
+    } catch (err) {
+      console.error('describeLivePoolForContext: on-chain read failed:', err);
+    }
+  }
+
+  return line;
+}
+
 /**
  * Free-form chat: private messages, or an @-mention in a group. Answers
  * questions and points people at /mulai or the Mini App — it does NOT
@@ -731,7 +783,7 @@ bot.callbackQuery('draftredo', async (ctx) => {
  * aside should never be able to conjure an arisan as a side effect.
  */
 async function handleGeneralMessage(ctx: {
-  chat: { type: string };
+  chat: { type: string; id: number };
   message?: { text?: string };
   from?: { id: number };
   reply: (text: string, extra?: Record<string, unknown>) => Promise<unknown>;
@@ -747,21 +799,22 @@ async function handleGeneralMessage(ctx: {
 
   await ctx.replyWithChatAction('typing');
 
+  // Group-only: a private chat has no single "the pool" to describe.
+  let systemPrompt = BASE_SYSTEM_PROMPT;
+  if (!isPrivate) {
+    try {
+      const poolContext = await describeLivePoolForContext(ctx.chat.id.toString());
+      if (poolContext) systemPrompt += `\n\n${poolContext}`;
+    } catch (err) {
+      console.error('failed to load pool context for AI reply:', err);
+    }
+  }
+
   try {
     const response = await groq.chat.completions.create({
       model: 'openai/gpt-oss-120b',
       messages: [
-        {
-          role: 'system',
-          content:
-            'Kamu adalah Circa, asisten arisan on-chain yang ramah dan gaul. ' +
-            'Gunakan bahasa Indonesia santai (aku/kamu atau gue/lu). ' +
-            'Kalau user mau bikin arisan baru, arahkan mereka ketik /mulai di grup arisannya — ' +
-            'jangan pernah membuat arisan sendiri dari percakapan biasa. ' +
-            'Fitur tersedia: /mulai (bikin arisan baru), /saldopool (cek kas), /tutup (organizer nutup arisan di tengah). ' +
-            'Anggota bisa minta tukar giliran lebih awal (Piauw) lewat Mini App dengan menawarkan kompensasi ke kas cadangan. ' +
-            'Dana arisan aman di kontrak blockchain — tidak dipegang satu orang pun.',
-        },
+        { role: 'system', content: systemPrompt },
         { role: 'user', content: userMessage },
       ],
     });
