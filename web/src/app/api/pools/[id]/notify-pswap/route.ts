@@ -5,22 +5,21 @@ import { getPendingPrioritySwap } from '@/lib/soroban/read';
 import { bot } from '@/lib/bot';
 
 /**
- * DMs the target of a priority-swap request. `fee` is never taken from the
- * request body — it, and the fact that a pending request legitimately
- * exists at all, are read straight from the contract's own storage and
- * cross-checked against the caller.
+ * DMs the target that a priority-swap bid landed. `fee` is never taken from
+ * the request body — it, and the fact that a bid legitimately exists at
+ * all, are read straight from the contract's own storage and cross-checked
+ * against the caller.
  *
  * Two problems with trusting the client here: first, without verifying the
- * caller is genuinely the swap's requester, anyone could get any other
- * registered user DM'd an arbitrary "someone wants to swap with you"
- * message — a harassment/social-engineering vector with no real request
- * behind it. Second, a client-supplied `fee` embedded into a
- * `parse_mode: 'Markdown'` message is a Markdown-injection path — Telegram
- * markdown supports `[text](url)` links, so an unvalidated string there is
- * a phishing vector wearing the bot's own trusted identity. Reading both
- * facts from chain closes both at once: the fee is always a real i128, and
- * the DM only ever fires for a swap that actually exists with this caller
- * as its real requester.
+ * caller genuinely has an open bid, anyone could get any other registered
+ * user DM'd an arbitrary "someone wants to swap with you" message — a
+ * harassment/social-engineering vector with no real bid behind it. Second,
+ * a client-supplied `fee` embedded into a `parse_mode: 'Markdown'` message
+ * is a Markdown-injection path — Telegram markdown supports `[text](url)`
+ * links, so an unvalidated string there is a phishing vector wearing the
+ * bot's own trusted identity. Reading both facts from chain closes both at
+ * once: the fee is always a real i128, and the DM only ever fires for a bid
+ * that actually exists with this caller as its real bidder.
  */
 export async function POST(
   request: Request,
@@ -57,13 +56,16 @@ export async function POST(
     return NextResponse.json({ error: 'Kamu belum punya dompet.' }, { status: 409 });
   }
 
-  const pending = await getPendingPrioritySwap(pool.contract_id, target);
-  if (!pending || pending.requester !== callerRow.wallet_address) {
+  const bids = await getPendingPrioritySwap(pool.contract_id, target);
+  const mine = bids.find((b) => b.requester === callerRow.wallet_address);
+  if (!mine) {
     return NextResponse.json(
-      { error: 'Nggak ada permintaan tukar giliran dari kamu ke target ini.' },
+      { error: 'Nggak ada tawaran tukar giliran dari kamu ke target ini.' },
       { status: 403 },
     );
   }
+  const highestFee = bids.reduce((max, b) => (BigInt(b.fee) > BigInt(max) ? b.fee : max), '0');
+  const isHighest = mine.fee === highestFee;
 
   const { data: targetUser } = await supabase
     .from('users')
@@ -75,13 +77,18 @@ export async function POST(
   }
 
   try {
-    const feeFormatted = Number(pending.fee).toLocaleString('id-ID');
+    const feeFormatted = Number(mine.fee).toLocaleString('id-ID');
+    const competingNote =
+      bids.length > 1
+        ? `\n\nAda ${bids.length} tawaran total buat slot ini — cuma yang tertinggi yang bisa kamu terima.`
+        : '';
 
     await bot.api.sendMessage(
       targetUser.telegram_id,
-      `Permintaan Tukar Giliran (Piauw)\n\n` +
-        `Seseorang di arisan "${pool.name}" ingin menukar gilirannya dengan giliranmu yang lebih awal.\n\n` +
-        `Sebagai gantinya, dia menawarkan fee sebesar Rp${feeFormatted} yang akan dimasukkan ke kas cadangan arisan.\n\n` +
+      `Tawaran Tukar Giliran (Piauw)\n\n` +
+        `Seseorang di arisan "${pool.name}" nawar buat gantiin posisimu yang paling depan.\n\n` +
+        `Fee yang ditawarin: Rp${feeFormatted}${isHighest ? ' (tertinggi saat ini)' : ''}, ` +
+        `masuk ke kas cadangan.${competingNote}\n\n` +
         `Pilih aksi di bawah:`,
       {
         reply_markup: {

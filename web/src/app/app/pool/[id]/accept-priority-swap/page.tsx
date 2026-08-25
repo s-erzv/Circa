@@ -18,21 +18,31 @@ type PoolInfo = {
   contractId: string | null;
 };
 
-type PendingSwap = {
+type Bid = {
   requester: string;
   requesterName: string;
   fee: string;
+  isHighest: boolean;
 };
 
 type WalletStatus = { hasWallet: boolean; walletAddress: string | null; credentialId: string | null };
 type Phase = 'loading' | 'ready' | 'needs-wallet' | 'creating-wallet' | 'accepting' | 'done' | 'error';
 
+/**
+ * This is an auction, not a single offer — any number of members can bid
+ * for the caller's front-of-queue slot at once. Only the currently-highest
+ * bid can ever be accepted (the contract itself enforces this), so the UI's
+ * job is just to make that one obvious rather than let the caller imagine
+ * they can pick a favorite among lower ones.
+ */
 export default function AcceptPrioritySwapPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [phase, setPhase] = useState<Phase>('loading');
   const [pool, setPool] = useState<PoolInfo | null>(null);
-  const [pending, setPending] = useState<PendingSwap | null>(null);
+  const [bids, setBids] = useState<Bid[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  const highest = bids.find((b) => b.isHighest) ?? null;
 
   useEffect(() => {
     initTelegramView();
@@ -54,13 +64,13 @@ export default function AcceptPrioritySwapPage({ params }: { params: Promise<{ i
         return;
       }
 
-      const pendingRes = await apiFetch<{ pending: PendingSwap | null }>(`/api/pools/${id}/pending-pswap`);
-      if (!pendingRes.pending) {
-        setError('Tidak ada permintaan tukar giliran yang menunggu persetujuanmu.');
+      const res = await apiFetch<{ bids: Bid[] }>(`/api/pools/${id}/pending-pswap`);
+      if (res.bids.length === 0) {
+        setError('Tidak ada yang menawar giliranmu saat ini.');
         setPhase('error');
         return;
       }
-      setPending(pendingRes.pending);
+      setBids(res.bids);
 
       const status = await apiFetch<WalletStatus>('/api/wallet/status');
       setPhase(status.hasWallet ? 'ready' : 'needs-wallet');
@@ -95,16 +105,16 @@ export default function AcceptPrioritySwapPage({ params }: { params: Promise<{ i
     setError(null);
     try {
       const status = await apiFetch<WalletStatus>('/api/wallet/status');
-      if (!status.hasWallet || !status.walletAddress || !status.credentialId || !pool?.contractId || !pending) {
+      if (!status.hasWallet || !status.walletAddress || !status.credentialId || !pool?.contractId || !highest) {
         throw new Error('Data belum siap.');
       }
 
       await relayAction(
-        { 
-          kind: 'pool_accept_priority_swap', 
-          poolId: pool.contractId, 
+        {
+          kind: 'pool_accept_priority_swap',
+          poolId: pool.contractId,
           target: status.walletAddress,
-          requester: pending.requester
+          requester: highest.requester,
         },
         status.credentialId,
       );
@@ -123,7 +133,7 @@ export default function AcceptPrioritySwapPage({ params }: { params: Promise<{ i
 
   return (
     <main className="flex min-h-dvh flex-col gap-6 p-6">
-      <h1 className="text-2xl font-semibold">Setujui Tukar Giliran</h1>
+      <h1 className="text-2xl font-semibold">Tawaran Tukar Giliran</h1>
 
       {error && (
         <div className="rounded-xl border border-red-300/40 bg-red-500/10 p-4 text-sm">
@@ -133,17 +143,30 @@ export default function AcceptPrioritySwapPage({ params }: { params: Promise<{ i
 
       {phase === 'loading' && <p className="text-sm opacity-60">Sebentar…</p>}
 
-      {pool && pending && phase !== 'loading' && phase !== 'error' && phase !== 'done' && (
-        <section className="rounded-xl border border-black/10 p-4 text-sm dark:border-white/15 flex flex-col gap-3">
-          <p>
-            <strong>{pending.requesterName}</strong> ingin bertukar posisi denganmu.
+      {pool && bids.length > 0 && phase !== 'loading' && phase !== 'error' && phase !== 'done' && (
+        <section className="flex flex-col gap-3">
+          <p className="text-sm opacity-70">
+            {bids.length > 1
+              ? `${bids.length} orang nawar buat gantiin posisimu. Tawaran tertinggi yang bisa kamu terima:`
+              : 'Ada yang nawar buat gantiin posisimu:'}
           </p>
-          <p className="opacity-70">
-            Sebagai kompensasi, dia akan membayar <strong>Rp{Number(pending.fee).toLocaleString('id-ID')}</strong> yang akan masuk ke kas cadangan dan dibagikan ke semua anggota di akhir periode.
-          </p>
-          <p className="opacity-70 mt-2 font-medium">
-            Giliranmu akan mundur menempati urutan {pending.requesterName} sebelumnya.
-          </p>
+          {highest && (
+            <div className="rounded-xl border-2 border-foreground p-4 text-sm">
+              <p>
+                <strong>{highest.requesterName}</strong> — Rp{Number(highest.fee).toLocaleString('id-ID')}
+              </p>
+              <p className="mt-1 opacity-70">
+                Masuk ke kas cadangan, dibagikan ke semua anggota di akhir periode.
+                Giliranmu mundur menempati urutan {highest.requesterName} sebelumnya.
+              </p>
+            </div>
+          )}
+          {bids.length > 1 && (
+            <div className="rounded-xl border border-black/10 p-3 text-xs opacity-60 dark:border-white/15">
+              {bids.length - 1} tawaran lain di bawah ini nggak bisa diterima kecuali tawaran di atas
+              ditolak dulu — cuma yang tertinggi yang berlaku.
+            </div>
+          )}
         </section>
       )}
 
@@ -164,7 +187,7 @@ export default function AcceptPrioritySwapPage({ params }: { params: Promise<{ i
 
       {phase === 'ready' && (
         <button onClick={onAccept} className="rounded-xl bg-green-600 px-4 py-3 text-white font-medium">
-          Setujui & Tukar Sekarang
+          Terima Tawaran Tertinggi & Tukar
         </button>
       )}
 
@@ -176,7 +199,8 @@ export default function AcceptPrioritySwapPage({ params }: { params: Promise<{ i
         <div className="flex flex-col gap-3">
           <p className="text-lg font-semibold">Berhasil bertukar giliran!</p>
           <p className="text-sm opacity-70">
-            Urutan kalian sudah ditukar di kontrak dan fee kompensasi sudah ditarik. Balik ke grup ya!
+            Urutan kalian sudah ditukar di kontrak, dan setiap tawaran lain sudah otomatis
+            dikembalikan ke yang nawar. Balik ke grup ya!
           </p>
         </div>
       )}

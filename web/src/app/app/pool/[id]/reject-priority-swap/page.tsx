@@ -18,10 +18,11 @@ type PoolInfo = {
   contractId: string | null;
 };
 
-type PendingSwap = {
+type Bid = {
   requester: string;
   requesterName: string;
   fee: string;
+  isHighest: boolean;
 };
 
 type WalletStatus = { hasWallet: boolean; walletAddress: string | null; credentialId: string | null };
@@ -31,7 +32,7 @@ export default function RejectPrioritySwapPage({ params }: { params: Promise<{ i
   const { id } = use(params);
   const [phase, setPhase] = useState<Phase>('loading');
   const [pool, setPool] = useState<PoolInfo | null>(null);
-  const [pending, setPending] = useState<PendingSwap | null>(null);
+  const [bids, setBids] = useState<Bid[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -54,13 +55,13 @@ export default function RejectPrioritySwapPage({ params }: { params: Promise<{ i
         return;
       }
 
-      const pendingRes = await apiFetch<{ pending: PendingSwap | null }>(`/api/pools/${id}/pending-pswap`);
-      if (!pendingRes.pending) {
-        setError('Tidak ada permintaan tukar giliran yang menunggu persetujuanmu.');
+      const res = await apiFetch<{ bids: Bid[] }>(`/api/pools/${id}/pending-pswap`);
+      if (res.bids.length === 0) {
+        setError('Tidak ada yang menawar giliranmu saat ini.');
         setPhase('error');
         return;
       }
-      setPending(pendingRes.pending);
+      setBids(res.bids);
 
       const status = await apiFetch<WalletStatus>('/api/wallet/status');
       setPhase(status.hasWallet ? 'ready' : 'needs-wallet');
@@ -132,13 +133,21 @@ export default function RejectPrioritySwapPage({ params }: { params: Promise<{ i
 
       {phase === 'loading' && <p className="text-sm opacity-60">Sebentar…</p>}
 
-      {pool && pending && phase !== 'loading' && phase !== 'error' && phase !== 'done' && (
+      {pool && bids.length > 0 && phase !== 'loading' && phase !== 'error' && phase !== 'done' && (
         <section className="rounded-xl border border-black/10 p-4 text-sm dark:border-white/15 flex flex-col gap-3">
           <p>
-            Kamu akan menolak permintaan tukar giliran dari <strong>{pending.requesterName}</strong>.
+            Kamu akan menolak {bids.length > 1 ? `semua ${bids.length} tawaran` : 'tawaran'} tukar giliran:
           </p>
+          <ul className="opacity-70">
+            {bids.map((b) => (
+              <li key={b.requester}>
+                {b.requesterName} — Rp{Number(b.fee).toLocaleString('id-ID')}
+              </li>
+            ))}
+          </ul>
           <p className="opacity-70">
-            Giliranmu tidak akan berubah. {pending.requesterName} bisa mencoba mengajukan penawaran lagi nanti dengan fee yang lebih tinggi jika dia masih mau.
+            Giliranmu tidak akan berubah, dan setiap fee yang udah ditawar bakal otomatis balik
+            ke masing-masing yang nawar. Mereka bisa nyoba nawar lagi nanti kalau masih mau.
           </p>
         </section>
       )}

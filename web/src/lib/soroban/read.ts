@@ -94,7 +94,18 @@ export async function getMember(poolId: string, member: string): Promise<OnChain
   return readContract<OnChainMember>(poolId, 'get_member', [new Address(member).toScVal()]);
 }
 
-export async function getPendingPrioritySwap(poolId: string, targetAddress: string) {
+export type PriorityBid = { requester: string; fee: string };
+
+/**
+ * Every open bid on `target`'s front-of-queue slot — a plain array, not one
+ * request, since the contract now runs this as an auction: any number of
+ * members may bid at once, and only whichever bid is currently highest can
+ * ever be accepted (see priority.rs). Empty array means no bids, not `null`.
+ */
+export async function getPendingPrioritySwap(
+  poolId: string,
+  targetAddress: string,
+): Promise<PriorityBid[]> {
   const { Contract, Address, rpc, xdr, scValToBigInt } = await import('@stellar/stellar-sdk');
   const contract = new Contract(poolId);
   const key = xdr.ScVal.scvVec([
@@ -105,20 +116,25 @@ export async function getPendingPrioritySwap(poolId: string, targetAddress: stri
   const rpcServer = new rpc.Server(RPC_URL);
   try {
     const entry = await rpcServer.getContractData(contract, key as any);
-    const map = (entry.val as any).map();
-    if (!map) return null;
-    
-    let requester = '';
-    let fee = '0';
-    
-    for (const item of map) {
-      const sym = item.key().sym().toString();
-      if (sym === 'requester') requester = Address.fromScVal(item.val()).toString();
-      if (sym === 'fee') fee = scValToBigInt(item.val()).toString();
+    const vec = (entry.val as any).vec();
+    if (!vec) return [];
+
+    const bids: PriorityBid[] = [];
+    for (const bidScVal of vec) {
+      const map = (bidScVal as any).map();
+      if (!map) continue;
+      let requester = '';
+      let fee = '0';
+      for (const item of map) {
+        const sym = item.key().sym().toString();
+        if (sym === 'requester') requester = Address.fromScVal(item.val()).toString();
+        if (sym === 'fee') fee = scValToBigInt(item.val()).toString();
+      }
+      bids.push({ requester, fee });
     }
-    return { requester, fee };
+    return bids;
   } catch (e) {
-    return null;
+    return [];
   }
 }
 

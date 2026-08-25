@@ -3,6 +3,12 @@ import { requireUser } from '@/lib/session';
 import { supabase } from '@/lib/supabase';
 import { getPendingPrioritySwap } from '@/lib/soroban/read';
 
+/**
+ * Every open bid on the caller's own front-of-queue slot, highest first.
+ * The contract only ever lets `accept_priority_swap` succeed for whichever
+ * bid is currently highest (see priority.rs) — sorting here just makes that
+ * rule visible before the caller commits to accepting one.
+ */
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -20,9 +26,9 @@ export async function GET(
     .from('pools')
     .select('contract_id')
     .eq('id', id)
-    .single();
+    .maybeSingle();
 
-  if (!pool || !pool.contract_id) {
+  if (!pool?.contract_id) {
     return NextResponse.json({ error: 'Pool not found.' }, { status: 404 });
   }
 
@@ -30,29 +36,33 @@ export async function GET(
     .from('users')
     .select('wallet_address')
     .eq('telegram_id', user.id)
-    .single();
+    .maybeSingle();
 
   if (!userData?.wallet_address) {
     return NextResponse.json({ error: 'Wallet not configured.' }, { status: 409 });
   }
 
-  const pending = await getPendingPrioritySwap(pool.contract_id, userData.wallet_address);
-  
-  if (!pending) {
-    return NextResponse.json({ pending: null });
+  const bids = await getPendingPrioritySwap(pool.contract_id, userData.wallet_address);
+  if (bids.length === 0) {
+    return NextResponse.json({ bids: [] });
   }
 
-  const { data: requesterUser } = await supabase
+  const { data: requesterUsers } = await supabase
     .from('users')
-    .select('telegram_username')
-    .eq('wallet_address', pending.requester)
-    .maybeSingle();
+    .select('wallet_address, telegram_username')
+    .in('wallet_address', bids.map((b) => b.requester));
+
+  const sorted = [...bids].sort((a, b) => Number(BigInt(b.fee) - BigInt(a.fee)));
 
   return NextResponse.json({
-    pending: {
-      requester: pending.requester,
-      requesterName: requesterUser?.telegram_username ?? pending.requester.slice(0, 8) + '...',
-      fee: pending.fee,
-    }
+    bids: sorted.map((bid, i) => {
+      const requesterUser = requesterUsers?.find((u) => u.wallet_address === bid.requester);
+      return {
+        requester: bid.requester,
+        requesterName: requesterUser?.telegram_username ?? bid.requester.slice(0, 8) + '...',
+        fee: bid.fee,
+        isHighest: i === 0,
+      };
+    }),
   });
 }

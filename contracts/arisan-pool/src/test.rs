@@ -928,43 +928,31 @@ fn test_contribute_survives_revoked_reputation_writer() {
     );
 }
 
-// ---------- priority swap ----------
+// ---------- priority swap (auction) ----------
 
 #[test]
-fn test_priority_swap_second_request_to_same_target_rejected() {
+fn test_priority_swap_rejects_target_not_front_of_queue() {
     let env = Env::default();
     env.mock_all_auths();
     let (client, organizer, token, asset) = setup_pool_with_token(&env);
     create_default_pool(&env, &client, &organizer, &token, 3);
-    let members = join_all(&env, &client, 3);
+    join_all(&env, &client, 3);
     let pool = client.get_pool();
-    let target = pool.queue.get_unchecked(0);
-    let requester1 = pool.queue.get_unchecked(1);
-    let requester2 = pool.queue.get_unchecked(2);
-    let _ = members;
-    asset.mint(&requester1, &1000i128);
+    // position 1, not the front (position 0) — a bid here buys nothing,
+    // since distribute() reshuffles the whole remaining queue after every
+    // payout.
+    let target = pool.queue.get_unchecked(1);
+    let requester = pool.queue.get_unchecked(2);
+    asset.mint(&requester, &1000i128);
 
-    client.request_priority_swap(&requester1, &target, &50i128);
-    // A second, different requester targeting the same person must not
-    // silently replace the first pending request — the first requester
-    // would have no way to know their offer vanished.
     assert_eq!(
-        client.try_request_priority_swap(&requester2, &target, &30i128),
-        Err(Ok(Error::PrioritySwapAlreadyPending))
-    );
-
-    // The original request (requester1's) is still the one on record —
-    // proven by target being able to accept it against requester1
-    // specifically; accept_priority_swap rejects a requester mismatch.
-    assert_eq!(
-        client.try_accept_priority_swap(&target, &requester1),
-        Ok(Ok(())),
-        "requester1's original request must have survived untouched"
+        client.try_request_priority_swap(&requester, &target, &50i128),
+        Err(Ok(Error::PrioritySwapTargetNotFront))
     );
 }
 
 #[test]
-fn test_priority_swap_reject_refunds_escrowed_fee_and_allows_new_request() {
+fn test_priority_swap_multiple_bidders_allowed_on_same_target() {
     let env = Env::default();
     env.mock_all_auths();
     let (client, organizer, token, asset) = setup_pool_with_token(&env);
@@ -972,25 +960,125 @@ fn test_priority_swap_reject_refunds_escrowed_fee_and_allows_new_request() {
     join_all(&env, &client, 3);
     let pool = client.get_pool();
     let target = pool.queue.get_unchecked(0);
-    let requester1 = pool.queue.get_unchecked(1);
-    let requester2 = pool.queue.get_unchecked(2);
-    let token_client = TokenClient::new(&env, &token);
-    asset.mint(&requester1, &1000i128);
-    asset.mint(&requester2, &1000i128);
+    let bidder1 = pool.queue.get_unchecked(1);
+    let bidder2 = pool.queue.get_unchecked(2);
+    asset.mint(&bidder1, &1000i128);
+    asset.mint(&bidder2, &1000i128);
 
-    client.request_priority_swap(&requester1, &target, &50i128);
-    assert_eq!(token_client.balance(&requester1), 950, "fee escrowed at request time");
+    client.request_priority_swap(&bidder1, &target, &50i128);
+    // A second, DIFFERENT bidder targeting the same slot must be allowed —
+    // this is the whole point of the auction: the target picks the best
+    // offer, not just whoever asked first.
+    let res = client.try_request_priority_swap(&bidder2, &target, &80i128);
+    assert!(res.is_ok(), "a competing bid from a different requester must be accepted");
+}
+
+#[test]
+fn test_priority_swap_same_requester_cannot_bid_twice() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 3);
+    join_all(&env, &client, 3);
+    let pool = client.get_pool();
+    let target = pool.queue.get_unchecked(0);
+    let bidder = pool.queue.get_unchecked(1);
+    asset.mint(&bidder, &1000i128);
+
+    client.request_priority_swap(&bidder, &target, &50i128);
+    assert_eq!(
+        client.try_request_priority_swap(&bidder, &target, &90i128),
+        Err(Ok(Error::PrioritySwapAlreadyPending)),
+        "one open bid per requester per target — raising requires the target to resolve first"
+    );
+}
+
+#[test]
+fn test_priority_swap_accept_rejects_non_highest_bid() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 3);
+    join_all(&env, &client, 3);
+    let pool = client.get_pool();
+    let target = pool.queue.get_unchecked(0);
+    let low_bidder = pool.queue.get_unchecked(1);
+    let high_bidder = pool.queue.get_unchecked(2);
+    asset.mint(&low_bidder, &1000i128);
+    asset.mint(&high_bidder, &1000i128);
+
+    client.request_priority_swap(&low_bidder, &target, &50i128);
+    client.request_priority_swap(&high_bidder, &target, &200i128);
+
+    // The target cannot cherry-pick the lower bid, even if they'd prefer
+    // to — only the highest is ever acceptable. This is what makes slot
+    // allocation an objective rule instead of the target's personal call.
+    assert_eq!(
+        client.try_accept_priority_swap(&target, &low_bidder),
+        Err(Ok(Error::PrioritySwapNotHighestBid))
+    );
+}
+
+#[test]
+fn test_priority_swap_accept_highest_bid_refunds_the_rest_and_swaps_queue() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 3);
+    join_all(&env, &client, 3);
+    let pool = client.get_pool();
+    let target = pool.queue.get_unchecked(0);
+    let low_bidder = pool.queue.get_unchecked(1);
+    let high_bidder = pool.queue.get_unchecked(2);
+    let token_client = TokenClient::new(&env, &token);
+    asset.mint(&low_bidder, &1000i128);
+    asset.mint(&high_bidder, &1000i128);
+
+    client.request_priority_swap(&low_bidder, &target, &50i128);
+    client.request_priority_swap(&high_bidder, &target, &200i128);
+    assert_eq!(token_client.balance(&low_bidder), 950, "low bidder's fee escrowed");
+    assert_eq!(token_client.balance(&high_bidder), 800, "high bidder's fee escrowed");
+
+    client.accept_priority_swap(&target, &high_bidder);
+
+    // High bidder's fee became the pool's, permanently.
+    assert_eq!(token_client.balance(&high_bidder), 800);
+    assert_eq!(client.get_pool().reserve_balance, 200);
+    // Low bidder — who never won — gets their escrowed fee back in full.
+    assert_eq!(
+        token_client.balance(&low_bidder),
+        1000,
+        "a bidder who didn't win must be refunded, not left having paid for nothing"
+    );
+    // Queue positions actually swapped: high_bidder is now at the front.
+    assert_eq!(client.get_pool().queue.get_unchecked(0), high_bidder);
+}
+
+#[test]
+fn test_priority_swap_reject_refunds_every_bidder() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 3);
+    join_all(&env, &client, 3);
+    let pool = client.get_pool();
+    let target = pool.queue.get_unchecked(0);
+    let bidder1 = pool.queue.get_unchecked(1);
+    let bidder2 = pool.queue.get_unchecked(2);
+    let token_client = TokenClient::new(&env, &token);
+    asset.mint(&bidder1, &1000i128);
+    asset.mint(&bidder2, &1000i128);
+
+    client.request_priority_swap(&bidder1, &target, &50i128);
+    client.request_priority_swap(&bidder2, &target, &80i128);
 
     client.reject_priority_swap(&target);
-    assert_eq!(
-        token_client.balance(&requester1),
-        1000,
-        "rejected request must refund the escrowed fee back to requester1"
-    );
+    assert_eq!(token_client.balance(&bidder1), 1000, "declining the auction refunds everyone");
+    assert_eq!(token_client.balance(&bidder2), 1000);
 
-    // Now that the first request is resolved, a new one may proceed.
-    let res = client.try_request_priority_swap(&requester2, &target, &30i128);
-    assert!(res.is_ok(), "a fresh request after resolution must be accepted");
+    // Bidding may resume from scratch afterward.
+    let res = client.try_request_priority_swap(&bidder1, &target, &30i128);
+    assert!(res.is_ok(), "a fresh bid after the auction was declined must be accepted");
 }
 
 // ---------- exit() debt guard ----------

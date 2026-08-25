@@ -23,7 +23,12 @@ type WalletStatus = { hasWallet: boolean; walletAddress: string | null; credenti
 type Phase = 'loading' | 'ready' | 'needs-wallet' | 'creating-wallet' | 'requesting' | 'done' | 'error';
 
 /**
- * Member requests a priority swap (Piauw) with someone earlier in the queue.
+ * Member bids to swap into the front-of-queue slot. Only `queue[0]` is ever
+ * a valid target — distribute() reshuffles the entire remaining queue after
+ * every payout, so a swap into any other position gets scrambled away
+ * before it would matter. This is an auction, not a single offer: other
+ * members may also be bidding on the same slot, and whichever bid ends up
+ * highest is the only one the front-of-queue person can accept.
  */
 export default function PrioritySwapPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -31,8 +36,6 @@ export default function PrioritySwapPage({ params }: { params: Promise<{ id: str
   const [pool, setPool] = useState<PoolInfo | null>(null);
   const [wallet, setWallet] = useState<WalletStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
-  
-  const [target, setTarget] = useState<string>('');
   const [fee, setFee] = useState<string>('');
 
   useEffect(() => {
@@ -91,8 +94,9 @@ export default function PrioritySwapPage({ params }: { params: Promise<{ id: str
   }
 
   async function onRequest() {
+    const target = pool?.queue[0];
     if (!target) {
-      setError('Pilih target yang mau ditukar gilirannya.');
+      setError('Belum ada urutan giliran buat pool ini.');
       return;
     }
     const feeBig = BigInt(fee || '0');
@@ -110,9 +114,9 @@ export default function PrioritySwapPage({ params }: { params: Promise<{ id: str
       }
 
       await relayAction(
-        { 
-          kind: 'pool_request_priority_swap', 
-          poolId: pool.contractId, 
+        {
+          kind: 'pool_request_priority_swap',
+          poolId: pool.contractId,
           requester: status.walletAddress,
           target,
           fee: feeBig.toString()
@@ -120,8 +124,8 @@ export default function PrioritySwapPage({ params }: { params: Promise<{ id: str
         status.credentialId,
       );
 
-      // notify-pswap re-derives the fee (and confirms the request is real)
-      // from the on-chain pending swap itself — target is all it needs.
+      // notify-pswap re-derives the fee (and confirms the bid is real) from
+      // the on-chain pending bids themselves — target is all it needs.
       await apiFetch(`/api/pools/${id}/notify-pswap`, {
         method: 'POST',
         body: JSON.stringify({ target })
@@ -139,10 +143,8 @@ export default function PrioritySwapPage({ params }: { params: Promise<{ id: str
     }
   }
 
-  // Filter queue to only show people EARLIER than the current user.
-  // We can't swap with ourselves, and there's no point swapping with someone later.
   const myIndex = wallet?.walletAddress && pool?.queue ? pool.queue.indexOf(wallet.walletAddress) : -1;
-  const eligibleTargets = pool?.queue && myIndex > 0 ? pool.queue.slice(0, myIndex) : [];
+  const frontOfQueue = pool?.queue[0] ?? null;
 
   return (
     <main className="flex min-h-dvh flex-col gap-6 p-6">
@@ -159,8 +161,9 @@ export default function PrioritySwapPage({ params }: { params: Promise<{ id: str
       {pool && wallet && phase !== 'loading' && phase !== 'error' && phase !== 'done' && (
         <section className="rounded-xl border border-black/10 p-4 text-sm dark:border-white/15">
           <p className="opacity-70 mb-4">
-            Butuh dana lebih awal? Kamu bisa minta tukar posisi dengan anggota yang dapet giliran lebih dulu. 
-            Sebagai gantinya, kamu bayar kompensasi (fee) yang akan masuk ke kas cadangan dan dibagikan ke semua anggota di akhir.
+            Butuh dana lebih awal? Kamu bisa nawar buat gantiin posisi yang paling depan urutan
+            (satu-satunya posisi yang beneran pasti — sisanya diundi ulang tiap siklus).
+            Anggota lain juga boleh ikut nawar; yang keliatan cuma tawaran tertinggi doang yang berlaku.
           </p>
 
           {myIndex === -1 ? (
@@ -169,24 +172,13 @@ export default function PrioritySwapPage({ params }: { params: Promise<{ id: str
             <p className="text-yellow-600 font-medium">Kamu udah ada di urutan pertama! Nggak bisa maju lagi.</p>
           ) : (
             <div className="flex flex-col gap-4">
-              <div>
-                <label className="block text-xs font-medium opacity-70 mb-1">Target Tukar (Urutan Lebih Awal)</label>
-                <select 
-                  className="w-full rounded-lg border border-black/10 p-3 bg-transparent dark:border-white/15"
-                  value={target}
-                  onChange={(e) => setTarget(e.target.value)}
-                >
-                  <option value="">-- Pilih Anggota --</option>
-                  {eligibleTargets.map((addr, idx) => (
-                    <option key={addr} value={addr}>Urutan ke-{idx + 1}: {addr.slice(0, 8)}...</option>
-                  ))}
-                </select>
+              <div className="rounded-lg border border-black/10 p-3 text-xs opacity-70 dark:border-white/15">
+                Target: {frontOfQueue?.slice(0, 8)}... (urutan pertama)
               </div>
-
               <div>
                 <label className="block text-xs font-medium opacity-70 mb-1">Fee (Masuk ke Kas Cadangan)</label>
-                <input 
-                  type="number" 
+                <input
+                  type="number"
                   min="0"
                   className="w-full rounded-lg border border-black/10 p-3 bg-transparent dark:border-white/15"
                   placeholder="Contoh: 50000"
@@ -222,7 +214,7 @@ export default function PrioritySwapPage({ params }: { params: Promise<{ id: str
           onClick={onRequest}
           className="rounded-xl bg-foreground px-4 py-3 text-background font-medium"
         >
-          Ajukan Permintaan
+          Ajukan Tawaran
         </button>
       )}
 
@@ -232,9 +224,10 @@ export default function PrioritySwapPage({ params }: { params: Promise<{ id: str
 
       {phase === 'done' && (
         <div className="flex flex-col gap-3">
-          <p className="text-lg font-semibold">Permintaan berhasil dikirim!</p>
+          <p className="text-lg font-semibold">Tawaran berhasil dikirim!</p>
           <p className="text-sm opacity-70">
-            Bot udah ngabarin target kamu. Kalau dia setuju, posisi kalian bakal ditukar dan fee dipotong otomatis.
+            Bot udah ngabarin. Kalau tawaranmu masih yang tertinggi pas dia memutuskan, posisi
+            kalian bakal ditukar dan fee dipotong otomatis — kalau kalah tawar, fee-mu balik utuh.
           </p>
         </div>
       )}

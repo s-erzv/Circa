@@ -46,8 +46,10 @@ pub enum DataKey {
     Pool,
     Member(Address),
     PendingSwap(Address),
-    /// Keyed by the target's address — the member being asked to give up their
-    /// earlier slot. Stores who asked and how much they're offering.
+    /// Keyed by the target's address — the member being asked to give up
+    /// their front-of-queue slot. Stores a `Vec<PrioritySwapRequest>`: every
+    /// currently-open bid for that slot, not just one — the target can only
+    /// ever accept whichever is highest, but multiple people may compete.
     PendingPrioritySwap(Address),
     Gov,
     Reputation,
@@ -85,9 +87,13 @@ pub enum Error {
     CannotSwapSelf = 26,
     FeeTooLow = 27,
     PrioritySwapAlreadyPending = 28,
+    PrioritySwapRequesterNotFound = 29,
+    PrioritySwapNotHighestBid = 30,
+    PrioritySwapTargetNotFront = 31,
 }
 
-/// Pending priority-swap request stored under `DataKey::PendingPrioritySwap(target)`.
+/// One bid in the priority-swap auction stored under
+/// `DataKey::PendingPrioritySwap(target)`.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PrioritySwapRequest {
