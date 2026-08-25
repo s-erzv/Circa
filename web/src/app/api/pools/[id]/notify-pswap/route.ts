@@ -48,7 +48,7 @@ export async function POST(
     // Notify the target user via DM
     await bot.api.sendMessage(
       targetUser.telegram_id,
-      `🔄 *Permintaan Tukar Giliran (Piauw)*\n\n` +
+      `*Permintaan Tukar Giliran (Piauw)*\n\n` +
       `Seseorang di arisan "${pool.name}" ingin menukar gilirannya dengan giliranmu yang lebih awal.\n\n` +
       `Sebagai gantinya, dia menawarkan fee sebesar *Rp${feeFormatted}* yang akan dimasukkan ke kas cadangan arisan.\n\n` +
       `Pilih aksi di bawah:`,
@@ -56,8 +56,8 @@ export async function POST(
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
-            [{ text: 'Setuju Tukar ✅', url: `https://t.me/${process.env.TELEGRAM_BOT_USERNAME ?? 'circagram_bot'}?start=apswap_${pool.id}` }],
-            [{ text: 'Tolak ❌', url: `https://t.me/${process.env.TELEGRAM_BOT_USERNAME ?? 'circagram_bot'}?start=rpswap_${pool.id}` }]
+            [{ text: 'Setuju Tukar', url: `https://t.me/${process.env.TELEGRAM_BOT_USERNAME ?? 'circagram_bot'}?start=apswap_${pool.id}` }],
+            [{ text: 'Tolak', url: `https://t.me/${process.env.TELEGRAM_BOT_USERNAME ?? 'circagram_bot'}?start=rpswap_${pool.id}` }]
           ]
         }
       }

@@ -167,10 +167,10 @@ export async function POST(request: Request) {
           await bot.api
             .sendMessage(
               pool.telegram_chat_id,
-              `✅ Semua udah setor! Pool siklus ke-${cycleDisplay} penuh — Rp${target.toLocaleString('id-ID')} siap dicairkan.\n\n` +
-                `💸 Giliran siklus ke-${cycleDisplay}: ${recipientLabel}\n\n` +
+              `Semua udah setor! Pool siklus ke-${cycleDisplay} penuh — Rp${target.toLocaleString('id-ID')} siap dicairkan.\n\n` +
+                `Giliran siklus ke-${cycleDisplay}: ${recipientLabel}\n\n` +
                 `Dana bisa dicairkan sekarang atau paling lambat otomatis cair sebelum ${deadlineDate} WIB.` +
-                (nextCycleInfo ? `\n\n🗓 ${nextCycleInfo} Yuk siap-siap setor lagi!` : ''),
+                (nextCycleInfo ? `\n\n${nextCycleInfo} Yuk siap-siap setor lagi!` : ''),
             )
             .catch((err) => console.error('failed to announce pool full:', err));
 
@@ -179,12 +179,12 @@ export async function POST(request: Request) {
             await bot.api
               .sendMessage(
                 recipientTelegramId,
-                `🎉 Giliran kamu dapat di arisan "${pool.name}" siklus ke-${cycleDisplay}!\n\n` +
+                `Giliran kamu dapat di arisan "${pool.name}" siklus ke-${cycleDisplay}!\n\n` +
                   `Pool udah terkumpul penuh Rp${target.toLocaleString('id-ID')}.\n` +
                   `Mau cair sekarang atau tunggu sampai deadline (${deadlineDate} WIB)?`,
                 {
                   reply_markup: deepLinkKeyboard(
-                    'Cair Sekarang 💸',
+                    'Cair Sekarang',
                     `cair_${claimed.pool_id}`,
                   ),
                 },

@@ -116,7 +116,6 @@ export default function TutupPage({ params }: { params: Promise<{ id: string }> 
 
   return (
     <main className="flex min-h-dvh flex-col gap-6 p-6">
-      <div className="text-4xl">⚠️</div>
       <h1 className="text-2xl font-semibold">Tutup Arisan</h1>
 
       {error && (

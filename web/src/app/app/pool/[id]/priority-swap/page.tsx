@@ -147,7 +147,6 @@ export default function PrioritySwapPage({ params }: { params: Promise<{ id: str
 
   return (
     <main className="flex min-h-dvh flex-col gap-6 p-6">
-      <div className="text-4xl">🔄</div>
       <h1 className="text-2xl font-semibold">Tukar Giliran (Piauw)</h1>
 
       {error && (

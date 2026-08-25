@@ -116,7 +116,7 @@ bot.command('start', async (ctx) => {
       join: { label: 'Gabung Resmi', path: `/app/pool/${poolId}/join` },
       setor: { label: 'Setor Sekarang', path: `/app/pool/${poolId}/setor` },
       jadwal: { label: 'Lihat Jadwal', path: `/app/pool/${poolId}/jadwal` },
-      cair: { label: 'Cair Sekarang 💸', path: `/app/pool/${poolId}/cair` },
+      cair: { label: 'Cair Sekarang', path: `/app/pool/${poolId}/cair` },
       tutup: { label: 'Tutup Arisan', path: `/app/pool/${poolId}/tutup` },
       pswap: { label: 'Minta Giliran Lebih Awal', path: `/app/pool/${poolId}/priority-swap` },
       apswap: { label: 'Setujui Permintaan Tukar', path: `/app/pool/${poolId}/accept-priority-swap` },
@@ -865,13 +865,13 @@ bot.command('tutup', async (ctx) => {
     const fmt = new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
 
     await ctx.reply(
-      `⚠️ Mau nutup arisan "${pool.name}" sekarang?\n\n` +
+      `Mau nutup arisan "${pool.name}" sekarang?\n\n` +
         `Status:\n` +
         `• Siklus ke-${onChain.current_cycle + 1} (sudah ${alreadyPaid} dari ${members.length} orang dapat)\n` +
         `• Kas tersisa: Rp${totalRemaining.toLocaleString('id-ID')}\n` +
         `• Perkiraan refund: Rp${refundPerPerson.toLocaleString('id-ID')}/orang untuk ${eligible} orang belum dapat\n\n` +
         `Ini tidak bisa dibatalkan — semua uang yang tersisa langsung dibagi.`,
-      { reply_markup: deepLinkKeyboard('Konfirmasi Tutup ⚠️', `tutup_${pool.id}`) },
+      { reply_markup: deepLinkKeyboard('Konfirmasi Tutup', `tutup_${pool.id}`) },
     );
   } catch (err) {
     console.error('failed to fetch pool state for /tutup:', err);

@@ -123,7 +123,6 @@ export default function AcceptPrioritySwapPage({ params }: { params: Promise<{ i
 
   return (
     <main className="flex min-h-dvh flex-col gap-6 p-6">
-      <div className="text-4xl">✅</div>
       <h1 className="text-2xl font-semibold">Setujui Tukar Giliran</h1>
 
       {error && (

@@ -91,7 +91,6 @@ export default function CairPage({ params }: { params: Promise<{ id: string }> }
 
   return (
     <main className="flex min-h-dvh flex-col gap-6 p-6">
-      <div className="text-4xl">💸</div>
       <h1 className="text-2xl font-semibold">Cairkan Dana</h1>
 
       {error && (
@@ -128,7 +127,7 @@ export default function CairPage({ params }: { params: Promise<{ id: string }> }
             onClick={onCair}
             className="rounded-xl bg-foreground px-4 py-3 text-background font-medium"
           >
-            Cair Sekarang 💸
+            Cair Sekarang
           </button>
         </section>
       )}
@@ -139,7 +138,6 @@ export default function CairPage({ params }: { params: Promise<{ id: string }> }
 
       {phase === 'done' && (
         <div className="flex flex-col gap-3">
-          <p className="text-4xl">🎉</p>
           <p className="text-lg font-semibold">Dana berhasil cair!</p>
           <p className="text-sm opacity-70">
             Cek dompet kamu — dananya udah masuk. Siklus berikutnya akan

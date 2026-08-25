@@ -127,7 +127,7 @@ async function tickPool(
       await bot.api
         .sendMessage(
           pool.telegram_chat_id,
-          `⚠️ ${penalizedNames} kena denda karena belum setor sampai deadline siklus ini.\n` +
+          `${penalizedNames} kena denda karena belum setor sampai deadline siklus ini.\n` +
             `Denda masuk kas cadangan. Masih bisa setor + lunasi tunggakan, tapi giliran bisa digeser kalau terus nunggak.`,
         )
         .catch((err) => console.error('failed to announce penalty:', err));
@@ -165,9 +165,9 @@ async function tickPool(
 
         await bot.api.sendMessage(
           pool.telegram_chat_id,
-          `💸 Dana siklus ke-${justFinishedCycle} udah cair ke ${label}!\n\n` +
+          `Dana siklus ke-${justFinishedCycle} udah cair ke ${label}!\n\n` +
             (nextCycleDays && !afterDistribute.closed
-              ? `📅 Siklus ke-${justFinishedCycle + 1} sekarang berjalan — deadline setor: ${nextDeadlineStr}.\nYuk setor buat siklus berikutnya!`
+              ? `Siklus ke-${justFinishedCycle + 1} sekarang berjalan — deadline setor: ${nextDeadlineStr}.\nYuk setor buat siklus berikutnya!`
               : ''),
           !afterDistribute.closed
             ? { reply_markup: new InlineKeyboard().url('Setor Sekarang', `https://t.me/${process.env.TELEGRAM_BOT_USERNAME ?? 'circagram_bot'}?start=setor_${pool.id}`) }
@@ -188,7 +188,7 @@ async function tickPool(
           await bot.api
             .sendMessage(
               pool.telegram_chat_id,
-              `🎲 Kocokan siklus ke-${justFinishedCycle + 1} selesai! Giliran berikutnya: ${nextLabel}`,
+              `Kocokan siklus ke-${justFinishedCycle + 1} selesai! Giliran berikutnya: ${nextLabel}`,
             )
             .catch((err) => console.error('failed to announce re-draw:', err));
         }
@@ -202,9 +202,9 @@ async function tickPool(
           const reservePerMember = memberCount > 0 ? Math.floor(reserveLeft / memberCount) : 0;
           await bot.api.sendMessage(
             pool.telegram_chat_id,
-            `🎉 Arisan "${pool.name}" selesai — semua ${memberCount} anggota udah kebagian giliran!\n\n` +
+            `Arisan "${pool.name}" selesai — semua ${memberCount} anggota udah kebagian giliran!\n\n` +
               (reservePerMember > 0
-                ? `💰 Sisa kas cadangan Rp${reserveLeft.toLocaleString('id-ID')} dibagikan ke semua anggota ` +
+                ? `Sisa kas cadangan Rp${reserveLeft.toLocaleString('id-ID')} dibagikan ke semua anggota ` +
                   `(Rp${reservePerMember.toLocaleString('id-ID')}/orang) — cek dompet kamu.\n\n`
                 : '') +
               `Makasih udah ikut! Mau arisan lagi? Ketik /mulai`,
