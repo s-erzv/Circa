@@ -120,12 +120,11 @@ export default function PrioritySwapPage({ params }: { params: Promise<{ id: str
         status.credentialId,
       );
 
-      // We should probably hit a webhook or notify the target via bot,
-      // but the event indexer or a simpler API call can handle that.
-      // For now, let's just trigger a DM via an API endpoint.
+      // notify-pswap re-derives the fee (and confirms the request is real)
+      // from the on-chain pending swap itself — target is all it needs.
       await apiFetch(`/api/pools/${id}/notify-pswap`, {
         method: 'POST',
-        body: JSON.stringify({ target, fee: feeBig.toString() })
+        body: JSON.stringify({ target })
       });
 
       setPhase('done');
