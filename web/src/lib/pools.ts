@@ -19,6 +19,53 @@ export type PoolRow = {
   reserve_bps: number | null;
 };
 
+/**
+ * The rules governing one arisan, in plain language, using its actual
+ * configured numbers — not a generic explainer. Shared by the `/aturan` bot
+ * command and the Mini App's rules page so the two never drift apart.
+ *
+ * Every clause here reflects something actually enforced on-chain today
+ * (verified against the current contract, not aspirational): the reserve
+ * split on close (cycle.rs's distribute()), the auction-only-on-queue[0]
+ * restriction (priority.rs), the debt-blocks-exit guard regardless of
+ * payout status (exit.rs) — this list should be updated whenever any of
+ * those actually change, not treated as fixed copy.
+ */
+export function formatArisanRules(pool: PoolRow): string {
+  const cycleDays = pool.cycle_length_secs ? Math.round(pool.cycle_length_secs / 86400) : null;
+  const deadlineDays = pool.deadline_offset_secs
+    ? Math.round(pool.deadline_offset_secs / 86400)
+    : null;
+  const amount = pool.contribution_amount ?? 0;
+  const penalty = pool.penalty_amount ?? 0;
+  const exitPenalty = pool.exit_penalty_amount ?? 0;
+  const reservePct = pool.reserve_bps != null ? (pool.reserve_bps / 100).toString() : '?';
+
+  return (
+    `Aturan main "${pool.name}":\n\n` +
+    `Setoran\n` +
+    `• Rp${amount.toLocaleString('id-ID')} tiap ${cycleDays ?? '?'} hari, langsung lewat QRIS — nggak perlu tanda tangan, bayar itu sendiri udah jadi buktinya.\n` +
+    `• Batas kumpul: ${deadlineDays ?? '?'} hari sebelum dianggap telat.\n\n` +
+    `Telat setor\n` +
+    `• Kena denda Rp${penalty.toLocaleString('id-ID')}, masuk kas cadangan.\n\n` +
+    `Kocokan giliran\n` +
+    `• Diacak ulang tiap kali ada yang cair — cuma urutan siklus BERIKUTNYA yang pasti, bukan urutan satu musim penuh.\n\n` +
+    `Tukar giliran (Piauw)\n` +
+    `• Cuma bisa nawar buat posisi paling depan (satu-satunya yang beneran pasti).\n` +
+    `• Boleh lebih dari satu orang nawar bareng — yang berlaku cuma tawaran tertinggi, otomatis, bukan pilihan orangnya.\n` +
+    `• Kalah tawar? Fee balik utuh.\n\n` +
+    `Keluar di tengah jalan\n` +
+    `• Udah pernah dapet giliran: bebas keluar, nggak ada refund maupun potongan.\n` +
+    `• Belum dapet giliran, udah setor siklus ini: setoran balik dikurangi potongan Rp${exitPenalty.toLocaleString('id-ID')}.\n` +
+    `• Belum dapet giliran, belum setor siklus ini: keluar gratis.\n` +
+    `• Masih punya utang (dari denda telat): harus dilunasi dulu sebelum bisa keluar — nggak bisa kabur bawa utang.\n\n` +
+    `Kas cadangan\n` +
+    `• ${reservePct}% dari tiap pencairan disisihkan buat nutupin kalau ada yang nunggak.\n` +
+    `• Sisanya dibagi rata ke semua anggota begitu arisan ini kelar.\n\n` +
+    `Keputusan soal keluarin/skip anggota diputusin lewat voting, bukan sepihak organizer.`
+  );
+}
+
 export type DraftTerms = {
   name: string;
   memberCount: number;

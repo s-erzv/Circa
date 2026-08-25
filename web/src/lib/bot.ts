@@ -2,6 +2,7 @@ import { Bot, InlineKeyboard } from 'grammy';
 import { supabase } from './supabase';
 import {
   createDraftPool,
+  formatArisanRules,
   getLivePoolForChat,
   isInterested,
   listInterestedCount,
@@ -116,6 +117,7 @@ bot.command('start', async (ctx) => {
       join: { label: 'Gabung Resmi', path: `/app/pool/${poolId}/join` },
       setor: { label: 'Setor Sekarang', path: `/app/pool/${poolId}/setor` },
       jadwal: { label: 'Lihat Jadwal', path: `/app/pool/${poolId}/jadwal` },
+      aturan: { label: 'Lihat Aturan Main', path: `/app/pool/${poolId}/aturan` },
       cair: { label: 'Cair Sekarang', path: `/app/pool/${poolId}/cair` },
       tutup: { label: 'Tutup Arisan', path: `/app/pool/${poolId}/tutup` },
       pswap: { label: 'Minta Giliran Lebih Awal', path: `/app/pool/${poolId}/priority-swap` },
@@ -511,6 +513,29 @@ bot.command('saldopool', async (ctx) => {
   }
 });
 
+/**
+ * Group-only, like /saldopool — the rules that matter are always a
+ * specific arisan's actual configured numbers, not a generic explainer, so
+ * there's no private-chat version of this without a pool to describe.
+ */
+bot.command('aturan', async (ctx) => {
+  if (ctx.chat.type === 'private') {
+    await ctx.reply('Ketik /aturan di grup arisan kamu ya.');
+    return;
+  }
+
+  const chatId = ctx.chat.id.toString();
+  const pool = await getLivePoolForChat(chatId);
+  if (!pool) {
+    await ctx.reply('Belum ada arisan yang jalan di grup ini.');
+    return;
+  }
+
+  await ctx.reply(formatArisanRules(pool), {
+    reply_markup: deepLinkKeyboard('Buka di Mini App (bisa dibaca kapanpun)', `aturan_${pool.id}`),
+  });
+});
+
 bot.on('message:text', async (ctx) => {
   const telegramId = ctx.from?.id.toString();
   const chatId = ctx.chat.id.toString();
@@ -727,7 +752,7 @@ const BASE_SYSTEM_PROMPT =
   'Gunakan bahasa Indonesia santai (aku/kamu atau gue/lu). ' +
   'Kalau user mau bikin arisan baru, arahkan mereka ketik /mulai di grup arisannya — ' +
   'jangan pernah membuat arisan sendiri dari percakapan biasa. ' +
-  'Fitur tersedia: /mulai (bikin arisan baru), /saldopool (cek kas), /tutup (organizer nutup arisan di tengah). ' +
+  'Fitur tersedia: /mulai (bikin arisan baru), /saldopool (cek kas), /aturan (lihat aturan main lengkap), /tutup (organizer nutup arisan di tengah). ' +
   'Anggota bisa minta tukar giliran lebih awal (Piauw) lewat Mini App dengan menawarkan kompensasi ke kas cadangan. ' +
   'Dana arisan aman di kontrak blockchain — tidak dipegang satu orang pun.';
 
