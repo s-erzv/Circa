@@ -927,3 +927,93 @@ fn test_contribute_survives_revoked_reputation_writer() {
         "a broken reputation feed must never block contribute()"
     );
 }
+
+// ---------- priority swap ----------
+
+#[test]
+fn test_priority_swap_second_request_to_same_target_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 3);
+    let members = join_all(&env, &client, 3);
+    let pool = client.get_pool();
+    let target = pool.queue.get_unchecked(0);
+    let requester1 = pool.queue.get_unchecked(1);
+    let requester2 = pool.queue.get_unchecked(2);
+    let _ = members;
+    asset.mint(&requester1, &1000i128);
+
+    client.request_priority_swap(&requester1, &target, &50i128);
+    // A second, different requester targeting the same person must not
+    // silently replace the first pending request — the first requester
+    // would have no way to know their offer vanished.
+    assert_eq!(
+        client.try_request_priority_swap(&requester2, &target, &30i128),
+        Err(Ok(Error::PrioritySwapAlreadyPending))
+    );
+
+    // The original request (requester1's) is still the one on record —
+    // proven by target being able to accept it against requester1
+    // specifically; accept_priority_swap rejects a requester mismatch.
+    assert_eq!(
+        client.try_accept_priority_swap(&target, &requester1),
+        Ok(Ok(())),
+        "requester1's original request must have survived untouched"
+    );
+}
+
+#[test]
+fn test_priority_swap_reject_refunds_escrowed_fee_and_allows_new_request() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 3);
+    join_all(&env, &client, 3);
+    let pool = client.get_pool();
+    let target = pool.queue.get_unchecked(0);
+    let requester1 = pool.queue.get_unchecked(1);
+    let requester2 = pool.queue.get_unchecked(2);
+    let token_client = TokenClient::new(&env, &token);
+    asset.mint(&requester1, &1000i128);
+    asset.mint(&requester2, &1000i128);
+
+    client.request_priority_swap(&requester1, &target, &50i128);
+    assert_eq!(token_client.balance(&requester1), 950, "fee escrowed at request time");
+
+    client.reject_priority_swap(&target);
+    assert_eq!(
+        token_client.balance(&requester1),
+        1000,
+        "rejected request must refund the escrowed fee back to requester1"
+    );
+
+    // Now that the first request is resolved, a new one may proceed.
+    let res = client.try_request_priority_swap(&requester2, &target, &30i128);
+    assert!(res.is_ok(), "a fresh request after resolution must be accepted");
+}
+
+// ---------- exit() debt guard ----------
+
+#[test]
+fn test_exit_blocked_by_outstanding_debt_before_payout() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, _asset) = setup_pool_with_token(&env);
+    create_default_pool(&env, &client, &organizer, &token, 2);
+    let members = join_all(&env, &client, 2);
+    let m1 = members.get_unchecked(0);
+
+    // m1 never contributes and misses the deadline — penalized into debt,
+    // all before anyone has received a payout.
+    env.ledger().set_timestamp(env.ledger().timestamp() + 259_200 + 1);
+    client.penalize(&m1);
+    assert!(client.get_member(&m1).balance_owed > 0);
+    assert!(!client.get_member(&m1).received_payout);
+
+    assert_eq!(
+        client.try_exit(&m1),
+        Err(Ok(Error::OutstandingDebt)),
+        "debt must block exit even before this member has ever been paid out"
+    );
+}

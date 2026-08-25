@@ -9,10 +9,13 @@ pub fn exit(env: &Env, member_addr: Address) -> Result<(), Error> {
     if member.exited {
         return Err(Error::AlreadyExited);
     }
-    // A member who already took their lump-sum payout may not walk away
-    // while still owing the pool — the "take the payout and disappear"
-    // pattern this lock exists to prevent.
-    if member.received_payout && member.balance_owed > 0 {
+    // Nobody may walk away while still owing the pool, regardless of
+    // whether they've already received their payout — a member who was
+    // penalized (balance_owed > 0) but hasn't been paid out yet could
+    // otherwise exit and simply never settle that debt, since
+    // perform_removal has no debt-collection step of its own. Pay it down
+    // via pay_debt() first.
+    if member.balance_owed > 0 {
         return Err(Error::OutstandingDebt);
     }
 

@@ -84,6 +84,7 @@ pub enum Error {
     NotOrganizer = 25,
     CannotSwapSelf = 26,
     FeeTooLow = 27,
+    PrioritySwapAlreadyPending = 28,
 }
 
 /// Pending priority-swap request stored under `DataKey::PendingPrioritySwap(target)`.
