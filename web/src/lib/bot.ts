@@ -188,12 +188,21 @@ type DraftState =
       cycleLengthSecs: number;
     }
   | {
+      step: 'drawmode';
+      name: string;
+      memberCount: number;
+      contributionAmount: number;
+      cycleLengthSecs: number;
+      deadlineOffsetSecs: number;
+    }
+  | {
       step: 'confirm';
       name: string;
       memberCount: number;
       contributionAmount: number;
       cycleLengthSecs: number;
       deadlineOffsetSecs: number;
+      drawMode: 'per_cycle' | 'upfront';
     };
 
 const draftStates = new Map<string, DraftState>();
@@ -556,7 +565,12 @@ bot.on('message:text', async (ctx) => {
  *  capping to make sense — then shows the final summary + confirm buttons.
  *  Shared by every path that can reach a complete draft, whether that took
  *  one message or three. */
-async function showConfirmSummary(
+/**
+ * The one binary choice worth an explicit button tap rather than free-text
+ * parsing or a silent default: it changes what priority-swap can even do
+ * (see priority.rs's DrawMode doc comment) and can't be changed later.
+ */
+async function askDrawMode(
   ctx: { reply: (text: string, extra?: Record<string, unknown>) => Promise<unknown> },
   key: string,
   basics: { name: string; memberCount: number; contributionAmount: number },
@@ -564,23 +578,54 @@ async function showConfirmSummary(
   rawDeadlineDays: number | null,
 ) {
   const deadlineDays = Math.max(1, Math.min(rawDeadlineDays ?? 3, cycleDays - 1 || 1));
-  const next = {
-    step: 'confirm' as const,
+  draftStates.set(key, {
+    step: 'drawmode',
     ...basics,
     cycleLengthSecs: cycleDays * 86400,
     deadlineOffsetSecs: deadlineDays * 86400,
-  };
+  });
+
+  await ctx.reply(
+    `Urutan giliran mau diaturnya gimana?\n\n` +
+      `• Diundi ulang tiap siklus — cuma siapa yang cair BERIKUTNYA yang pasti, sisanya diacak lagi tiap kali ada yang cair.\n` +
+      `• Sekali aja di awal — begitu semua gabung, urutannya langsung tetap sampai arisan ini kelar.`,
+    {
+      reply_markup: new InlineKeyboard()
+        .text('Diundi tiap siklus', 'drawmode_percycle')
+        .text('Sekali di awal', 'drawmode_upfront'),
+    },
+  );
+}
+
+async function showConfirmSummary(
+  ctx: { reply: (text: string, extra?: Record<string, unknown>) => Promise<unknown> },
+  key: string,
+  state: {
+    name: string;
+    memberCount: number;
+    contributionAmount: number;
+    cycleLengthSecs: number;
+    deadlineOffsetSecs: number;
+  },
+  drawMode: 'per_cycle' | 'upfront',
+) {
+  const next = { step: 'confirm' as const, ...state, drawMode };
   draftStates.set(key, next);
 
+  const cycleDays = next.cycleLengthSecs / 86400;
+  const deadlineDays = next.deadlineOffsetSecs / 86400;
   const schedule = projectScheduleDates(next.memberCount, next.cycleLengthSecs).join('\n');
   const penaltyAmount = Math.round(next.contributionAmount * PENALTY_RATE);
   const exitPenaltyAmount = Math.round(next.contributionAmount * EXIT_PENALTY_RATE);
+  const drawModeLabel =
+    drawMode === 'upfront' ? 'sekali di awal, tetap sampai kelar' : 'diundi ulang tiap siklus';
 
   await ctx.reply(
     `Ringkasan "${next.name}":\n` +
       `• ${next.memberCount} anggota\n` +
       `• Setoran Rp${next.contributionAmount.toLocaleString('id-ID')} / siklus\n` +
-      `• Tiap ${cycleDays} hari, batas kumpul ${deadlineDays} hari sebelum telat\n\n` +
+      `• Tiap ${cycleDays} hari, batas kumpul ${deadlineDays} hari sebelum telat\n` +
+      `• Urutan kocokan: ${drawModeLabel}\n\n` +
       `Aturan mainnya:\n` +
       `• Telat setor lewat batas: kena denda Rp${penaltyAmount.toLocaleString('id-ID')}, masuk kas cadangan\n` +
       `• Keluar duluan sebelum kelar: kena potongan Rp${exitPenaltyAmount.toLocaleString('id-ID')}\n` +
@@ -620,7 +665,7 @@ async function handleDraftStep(
       // Said everything in one go — don't re-ask what's already answered.
       if (parsed.cycleDays) {
         if (parsed.deadlineDays) {
-          await showConfirmSummary(ctx, key, basics, parsed.cycleDays, parsed.deadlineDays);
+          await askDrawMode(ctx, key, basics, parsed.cycleDays, parsed.deadlineDays);
           return;
         }
         draftStates.set(key, {
@@ -655,7 +700,7 @@ async function handleDraftStep(
         return;
       }
       if (deadlineDays) {
-        await showConfirmSummary(ctx, key, state, cycleDays, deadlineDays);
+        await askDrawMode(ctx, key, state, cycleDays, deadlineDays);
         return;
       }
       draftStates.set(key, { ...state, step: 'deadline', cycleLengthSecs: cycleDays * 86400 });
@@ -669,7 +714,12 @@ async function handleDraftStep(
     if (state.step === 'deadline') {
       const cycleDays = state.cycleLengthSecs / 86400;
       const rawDays = await extractDays(userMessage, 'Jumlah hari batas toleransi sebelum telat');
-      await showConfirmSummary(ctx, key, state, cycleDays, rawDays);
+      await askDrawMode(ctx, key, state, cycleDays, rawDays);
+      return;
+    }
+
+    if (state.step === 'drawmode') {
+      await ctx.reply('Pilih salah satu tombol di atas ya — Diundi tiap siklus atau Sekali di awal.');
       return;
     }
   } catch (error) {
@@ -677,6 +727,38 @@ async function handleDraftStep(
     await ctx.reply('Waduh, otak AI ku lagi ngelag nih. Coba /mulai lagi ya.');
   }
 }
+
+async function handleDrawModeChoice(
+  ctx: {
+    from?: { id: number; username?: string };
+    chat?: { id: number };
+    callbackQuery: { message?: { chat: { id: number } } };
+    reply: (text: string, extra?: Record<string, unknown>) => Promise<unknown>;
+    answerCallbackQuery: (opts?: { text?: string }) => Promise<unknown>;
+  },
+  drawMode: 'per_cycle' | 'upfront',
+) {
+  const telegramId = ctx.from?.id.toString();
+  const chatId = ctx.chat?.id.toString() ?? ctx.callbackQuery.message?.chat.id.toString() ?? '';
+  if (!telegramId) return;
+  const key = draftKey(chatId, telegramId);
+  const state = draftStates.get(key);
+
+  if (!state || state.step !== 'drawmode') {
+    await ctx.answerCallbackQuery({ text: 'Sesi drafnya udah kadaluwarsa, /mulai lagi ya.' });
+    return;
+  }
+  await ctx.answerCallbackQuery();
+  await showConfirmSummary(ctx, key, state, drawMode);
+}
+
+bot.callbackQuery('drawmode_percycle', async (ctx) => {
+  await handleDrawModeChoice(ctx, 'per_cycle');
+});
+
+bot.callbackQuery('drawmode_upfront', async (ctx) => {
+  await handleDrawModeChoice(ctx, 'upfront');
+});
 
 bot.callbackQuery('draftok', async (ctx) => {
   const telegramId = ctx.from.id.toString();
@@ -708,6 +790,7 @@ bot.callbackQuery('draftok', async (ctx) => {
       penaltyAmount: Math.round(state.contributionAmount * PENALTY_RATE),
       exitPenaltyAmount: Math.round(state.contributionAmount * EXIT_PENALTY_RATE),
       reserveBps: RESERVE_BPS,
+      drawMode: state.drawMode,
     });
   } catch (error) {
     console.error('createDraftPool failed:', error);

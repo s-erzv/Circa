@@ -14,7 +14,7 @@ mod priority;
 mod reputation;
 
 use soroban_sdk::{contract, contractimpl, Address, Env};
-pub use types::{Error, Member, Pool};
+pub use types::{DrawMode, Error, Member, Pool};
 
 /// Maximum reserve skim, in basis points (10% of each payout). The design
 /// intent is 2-3%; the hard ceiling that keeps `net_payout` non-negative is
@@ -31,6 +31,7 @@ impl ArisanPool {
         organizer: Address,
         token: Address,
         gateway: Address,
+        draw_mode: DrawMode,
         contribution_amount: i128,
         member_count: u32,
         cycle_length_secs: u64,
@@ -69,6 +70,7 @@ impl ArisanPool {
             organizer,
             token,
             gateway,
+            draw_mode,
             contribution_amount,
             member_count,
             cycle_length_secs,

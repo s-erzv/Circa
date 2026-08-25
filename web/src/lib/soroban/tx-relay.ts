@@ -53,6 +53,7 @@ export type RelayAction =
       organizer: string;
       token: string;
       gateway: string;
+      drawMode: 'per_cycle' | 'upfront';
       contributionAmount: string;
       memberCount: number;
       cycleLengthSecs: number;
@@ -74,6 +75,23 @@ export type RelayAction =
 
 function i128(value: string): xdr.ScVal {
   return nativeToScVal(BigInt(value), { type: 'i128' });
+}
+
+/**
+ * Encodes a unit-only Rust enum variant (no associated fields) the way
+ * soroban-sdk's `#[contracttype]` derive represents one: a one-element
+ * `ScVal::Vec` containing just the variant's name as a Symbol. Verified
+ * directly against a live deployed contract (simulated a real `create()`
+ * call built exactly this way) before relying on it here, rather than
+ * assumed from the general struct-encoding pattern used elsewhere in this
+ * file — enums use a different shape.
+ */
+function unitEnum(variant: string): xdr.ScVal {
+  return xdr.ScVal.scvVec([xdr.ScVal.scvSymbol(variant)]);
+}
+
+function drawModeScVal(mode: 'per_cycle' | 'upfront'): xdr.ScVal {
+  return unitEnum(mode === 'upfront' ? 'Upfront' : 'PerCycle');
 }
 
 function buildInvocation(action: RelayAction): {
@@ -99,9 +117,9 @@ function buildInvocation(action: RelayAction): {
       };
     case 'pool_create':
       // Argument order must match ArisanPool::create exactly:
-      // organizer, token, gateway, contribution_amount, member_count,
-      // cycle_length_secs, deadline_offset_secs, penalty_amount,
-      // exit_penalty_amount, reserve_bps.
+      // organizer, token, gateway, draw_mode, contribution_amount,
+      // member_count, cycle_length_secs, deadline_offset_secs,
+      // penalty_amount, exit_penalty_amount, reserve_bps.
       return {
         contractId: action.poolId,
         method: 'create',
@@ -109,6 +127,7 @@ function buildInvocation(action: RelayAction): {
           new Address(action.organizer).toScVal(),
           new Address(action.token).toScVal(),
           new Address(action.gateway).toScVal(),
+          drawModeScVal(action.drawMode),
           i128(action.contributionAmount),
           nativeToScVal(action.memberCount, { type: 'u32' }),
           nativeToScVal(action.cycleLengthSecs, { type: 'u64' }),

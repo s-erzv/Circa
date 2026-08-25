@@ -100,6 +100,7 @@ export async function POST(
       organizer: userRow.wallet_address,
       token: tokenAddress,
       gateway: gatewayAddress,
+      drawMode: pool.draw_mode,
       contributionAmount: String(pool.contribution_amount),
       memberCount: pool.member_count,
       cycleLengthSecs: pool.cycle_length_secs,

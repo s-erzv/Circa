@@ -21,6 +21,7 @@ export type PoolDraftTerms = {
   organizer: string;
   token: string;
   gateway: string;
+  drawMode: 'per_cycle' | 'upfront';
   contributionAmount: string;
   memberCount: number;
   cycleLengthSecs: number;
@@ -46,6 +47,7 @@ export async function prepareCreatePool(
     organizer: terms.organizer,
     token: terms.token,
     gateway: terms.gateway,
+    drawMode: terms.drawMode,
     contributionAmount: terms.contributionAmount,
     memberCount: terms.memberCount,
     cycleLengthSecs: terms.cycleLengthSecs,

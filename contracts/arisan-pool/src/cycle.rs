@@ -1,6 +1,6 @@
 use crate::events::{Contributed, DebtPaid, Distributed, Drew, Penalized, ReserveDistributed};
 use crate::storage;
-use crate::types::Error;
+use crate::types::{DrawMode, Error};
 use soroban_sdk::{token, Address, Env, MuxedAddress};
 
 /// Shared body of `contribute()`/`contribute_via_gateway()` — identical in
@@ -211,11 +211,13 @@ pub fn distribute(env: &Env) -> Result<(), Error> {
                 .publish(env);
             }
         }
-    } else {
+    } else if matches!(pool.draw_mode, DrawMode::PerCycle) {
         // Re-draw the remaining queue so each cycle has a fresh random order
         // among those still waiting for their turn. The previous recipient was
         // already pop_front()'d above and is no longer in the queue, so they
-        // can't be drawn again.
+        // can't be drawn again. In DrawMode::Upfront the order was fixed once
+        // at activation and is never touched again, so this whole branch is
+        // skipped — the remaining queue is left exactly as it already was.
         pool.queue = crate::draw::draw_order(env, &pool.queue);
 
         // Publish the result of the draw so off-chain listeners (bot, indexer)

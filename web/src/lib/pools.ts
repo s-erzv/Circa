@@ -17,6 +17,7 @@ export type PoolRow = {
   penalty_amount: number | null;
   exit_penalty_amount: number | null;
   reserve_bps: number | null;
+  draw_mode: 'per_cycle' | 'upfront';
 };
 
 /**
@@ -40,6 +41,7 @@ export function formatArisanRules(pool: PoolRow): string {
   const penalty = pool.penalty_amount ?? 0;
   const exitPenalty = pool.exit_penalty_amount ?? 0;
   const reservePct = pool.reserve_bps != null ? (pool.reserve_bps / 100).toString() : '?';
+  const isUpfront = pool.draw_mode === 'upfront';
 
   return (
     `Aturan main "${pool.name}":\n\n` +
@@ -49,9 +51,13 @@ export function formatArisanRules(pool: PoolRow): string {
     `Telat setor\n` +
     `• Kena denda Rp${penalty.toLocaleString('id-ID')}, masuk kas cadangan.\n\n` +
     `Kocokan giliran\n` +
-    `• Diacak ulang tiap kali ada yang cair — cuma urutan siklus BERIKUTNYA yang pasti, bukan urutan satu musim penuh.\n\n` +
+    (isUpfront
+      ? `• Diundi SEKALI aja pas semua slot penuh — urutannya tetap sama sampai arisan ini kelar.\n\n`
+      : `• Diacak ulang tiap kali ada yang cair — cuma urutan siklus BERIKUTNYA yang pasti, bukan urutan satu musim penuh.\n\n`) +
     `Tukar giliran (Piauw)\n` +
-    `• Cuma bisa nawar buat posisi paling depan (satu-satunya yang beneran pasti).\n` +
+    (isUpfront
+      ? `• Bisa nawar buat posisi mana aja yang lebih awal dari posisimu (urutannya tetap, jadi semua posisi beneran berarti).\n`
+      : `• Cuma bisa nawar buat posisi paling depan (satu-satunya yang beneran pasti — posisi lain bakal diacak ulang lagi).\n`) +
     `• Boleh lebih dari satu orang nawar bareng — yang berlaku cuma tawaran tertinggi, otomatis, bukan pilihan orangnya.\n` +
     `• Kalah tawar? Fee balik utuh.\n\n` +
     `Keluar di tengah jalan\n` +
@@ -75,6 +81,7 @@ export type DraftTerms = {
   penaltyAmount: number;
   exitPenaltyAmount: number;
   reserveBps: number;
+  drawMode: 'per_cycle' | 'upfront';
 };
 
 /**
@@ -107,6 +114,7 @@ export async function createDraftPool(
       penalty_amount: terms.penaltyAmount,
       exit_penalty_amount: terms.exitPenaltyAmount,
       reserve_bps: terms.reserveBps,
+      draw_mode: terms.drawMode,
     })
     .select()
     .single();

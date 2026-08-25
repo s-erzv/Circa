@@ -1,10 +1,31 @@
 use soroban_sdk::{contracterror, contracttype, Address, Vec};
 
+/// How the payout queue's order is decided, chosen once at pool creation.
+///
+/// `PerCycle`: `distribute()` re-shuffles the entire remaining queue after
+/// every payout. Only `queue[0]` — who gets paid at the very next
+/// `distribute()` — is ever a settled fact; every later position is
+/// provisional until its own cycle arrives. This is why priority-swap
+/// restricts bidding to `queue[0]` only in this mode: any later position
+/// would just get scrambled again before it mattered.
+///
+/// `Upfront`: the order drawn at activation is never touched again — every
+/// position is settled for the whole life of the pool from day one.
+/// Priority-swap may target ANY earlier position in this mode, since a swap
+/// into position 3 actually sticks.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DrawMode {
+    PerCycle,
+    Upfront,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Pool {
     pub organizer: Address,
     pub token: Address,
+    pub draw_mode: DrawMode,
     /// The one address allowed to call `contribute_via_gateway` — set once,
     /// at construction, by whoever deploys the pool (never organizer- or
     /// gov-settable). See `cycle::contribute_via_gateway`'s doc comment for

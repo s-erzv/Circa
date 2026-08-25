@@ -36,6 +36,7 @@ fn create_default_pool(
         organizer,
         token,
         &gateway,
+        &DrawMode::PerCycle,
         &100i128,
         &member_count,
         &2_592_000u64, // 30 days
@@ -68,32 +69,32 @@ fn test_create_rejects_invalid_amounts() {
 
     assert_eq!(
         client.try_create(
-            &organizer, &token, &gateway, &0i128, &3u32, &2_592_000u64, &259_200u64, &10i128,
-            &5i128, &0u32,
+            &organizer, &token, &gateway, &DrawMode::PerCycle, &0i128, &3u32, &2_592_000u64,
+            &259_200u64, &10i128, &5i128, &0u32,
         ),
         Err(Ok(Error::InvalidAmount)),
         "contribution_amount must be positive"
     );
     assert_eq!(
         client.try_create(
-            &organizer, &token, &gateway, &100i128, &1u32, &2_592_000u64, &259_200u64, &10i128,
-            &5i128, &0u32,
+            &organizer, &token, &gateway, &DrawMode::PerCycle, &100i128, &1u32, &2_592_000u64,
+            &259_200u64, &10i128, &5i128, &0u32,
         ),
         Err(Ok(Error::InvalidAmount)),
         "member_count below 2 makes no sense as a rotating pool"
     );
     assert_eq!(
         client.try_create(
-            &organizer, &token, &gateway, &100i128, &3u32, &0u64, &259_200u64, &10i128, &5i128,
-            &0u32,
+            &organizer, &token, &gateway, &DrawMode::PerCycle, &100i128, &3u32, &0u64,
+            &259_200u64, &10i128, &5i128, &0u32,
         ),
         Err(Ok(Error::InvalidAmount)),
         "zero cycle_length_secs would collapse the deadline gate"
     );
     assert_eq!(
         client.try_create(
-            &organizer, &token, &gateway, &100i128, &3u32, &2_592_000u64, &0u64, &10i128, &5i128,
-            &0u32,
+            &organizer, &token, &gateway, &DrawMode::PerCycle, &100i128, &3u32, &2_592_000u64,
+            &0u64, &10i128, &5i128, &0u32,
         ),
         Err(Ok(Error::InvalidAmount)),
         "zero deadline_offset_secs would collapse the deadline gate"
@@ -103,6 +104,7 @@ fn test_create_rejects_invalid_amounts() {
             &organizer,
             &token,
             &gateway,
+            &DrawMode::PerCycle,
             &100i128,
             &3u32,
             &2_592_000u64,
@@ -125,8 +127,8 @@ fn test_create_twice_rejected() {
 
     assert_eq!(
         client.try_create(
-            &organizer, &token, &gateway, &100i128, &3u32, &2_592_000u64, &259_200u64, &10i128,
-            &5i128, &0u32,
+            &organizer, &token, &gateway, &DrawMode::PerCycle, &100i128, &3u32, &2_592_000u64,
+            &259_200u64, &10i128, &5i128, &0u32,
         ),
         Err(Ok(Error::PoolAlreadyExists))
     );
@@ -397,6 +399,61 @@ fn test_distribute_pays_queue_front_and_advances_cycle() {
 }
 
 #[test]
+fn test_distribute_does_not_reshuffle_queue_in_upfront_mode() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    let gateway = Address::generate(&env);
+    client.create(
+        &organizer, &token, &gateway, &DrawMode::Upfront, &100i128, &3u32, &2_592_000u64,
+        &259_200u64, &10i128, &5i128, &0u32,
+    );
+    let members = join_all(&env, &client, 3);
+    let _ = members;
+
+    let queue_before = client.get_pool().queue;
+    let remaining_before: soroban_sdk::Vec<Address> = queue_before.slice(1..queue_before.len());
+
+    for m in client.get_pool().queue.iter() {
+        asset.mint(&m, &1000i128);
+        client.contribute(&m);
+    }
+    env.ledger().set_timestamp(env.ledger().timestamp() + 259_200 + 1);
+    client.distribute();
+
+    // In Upfront mode, whoever was drawn into positions 1 and 2 at
+    // activation must still be there afterward, in the SAME order — no
+    // reshuffle, unlike DrawMode::PerCycle.
+    let queue_after = client.get_pool().queue;
+    assert_eq!(queue_after, remaining_before);
+}
+
+#[test]
+fn test_priority_swap_allows_non_front_target_in_upfront_mode() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    let gateway = Address::generate(&env);
+    client.create(
+        &organizer, &token, &gateway, &DrawMode::Upfront, &100i128, &3u32, &2_592_000u64,
+        &259_200u64, &10i128, &5i128, &0u32,
+    );
+    join_all(&env, &client, 3);
+    let pool = client.get_pool();
+    // position 1 — NOT the front, but still meaningful in Upfront mode
+    // since nothing gets reshuffled away.
+    let target = pool.queue.get_unchecked(1);
+    let requester = pool.queue.get_unchecked(2);
+    asset.mint(&requester, &1000i128);
+
+    let res = client.try_request_priority_swap(&requester, &target, &50i128);
+    assert!(
+        res.is_ok(),
+        "bidding on a non-front position must be allowed in Upfront mode"
+    );
+}
+
+#[test]
 fn test_distribute_is_permissionless() {
     let env = Env::default();
     env.mock_all_auths();
@@ -427,8 +484,8 @@ fn test_distribute_splits_leftover_reserve_among_members_on_close() {
     // reserve_bps = 500 (5%), unlike create_default_pool's 0 — needed to
     // actually accumulate something in reserve_balance to distribute.
     client.create(
-        &organizer, &token, &gateway, &100i128, &2u32, &2_592_000u64, &259_200u64, &10i128,
-        &5i128, &500u32,
+        &organizer, &token, &gateway, &DrawMode::PerCycle, &100i128, &2u32, &2_592_000u64,
+        &259_200u64, &10i128, &5i128, &500u32,
     );
     let members = join_all(&env, &client, 2);
     let token_client = TokenClient::new(&env, &token);

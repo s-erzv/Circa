@@ -1,15 +1,8 @@
 use crate::events::{PrioritySwapAccepted, PrioritySwapRejected, PrioritySwapRequested};
 use crate::storage::{self, BUMP_THRESHOLD, BUMP_TO};
-use crate::types::{DataKey, Error, PrioritySwapRequest};
+use crate::types::{DataKey, DrawMode, Error, PrioritySwapRequest};
 use soroban_sdk::{token, Address, Env, MuxedAddress, Vec};
 
-/// Only the front-of-queue slot (`queue[0]`) is ever worth bidding on.
-/// `distribute()` re-shuffles the ENTIRE remaining queue after every single
-/// payout, so any position other than 0 gets scrambled again before the next
-/// cycle even matters — a fee paid to move from position 5 to position 2
-/// buys nothing, since position 2 is no more "locked in" than position 5
-/// was. Position 0 alone is real: it's who gets paid at the very next
-/// `distribute()`, before any further reshuffle happens.
 fn read_bids(env: &Env, target: &Address) -> Vec<PrioritySwapRequest> {
     let key = DataKey::PendingPrioritySwap(target.clone());
     env.storage()
@@ -78,8 +71,28 @@ pub fn request_priority_swap(
         return Err(Error::NotInQueue);
     }
     let tgt_pos = pool.queue.first_index_of(&target).ok_or(Error::NotInQueue)?;
-    if tgt_pos != 0 {
-        return Err(Error::PrioritySwapTargetNotFront);
+
+    match pool.draw_mode {
+        // Only queue[0] is ever worth bidding on here — distribute() re-
+        // shuffles the ENTIRE remaining queue after every single payout, so
+        // any position other than 0 gets scrambled away before the next
+        // cycle even matters. Position 0 alone is real: it's who gets paid
+        // at the very next distribute(), before any further reshuffle.
+        DrawMode::PerCycle => {
+            if tgt_pos != 0 {
+                return Err(Error::PrioritySwapTargetNotFront);
+            }
+        }
+        // The order is fixed for the pool's whole life, so any earlier
+        // position genuinely sticks — same rule as the original design:
+        // requester must be later in queue than target (paying to move
+        // earlier).
+        DrawMode::Upfront => {
+            let req_pos = pool.queue.first_index_of(&requester).ok_or(Error::NotInQueue)?;
+            if req_pos <= tgt_pos {
+                return Err(Error::NotInQueue);
+            }
+        }
     }
 
     let mut bids = read_bids(env, &target);
