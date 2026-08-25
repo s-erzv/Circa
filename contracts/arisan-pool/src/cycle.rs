@@ -1,4 +1,4 @@
-use crate::events::{Contributed, DebtPaid, Distributed, Penalized};
+use crate::events::{Contributed, DebtPaid, Distributed, Drew, Penalized, ReserveDistributed};
 use crate::storage;
 use crate::types::Error;
 use soroban_sdk::{token, Address, Env, MuxedAddress};
@@ -183,6 +183,49 @@ pub fn distribute(env: &Env) -> Result<(), Error> {
     pool.cycle_deadline = env.ledger().timestamp() + pool.deadline_offset_secs;
     if pool.queue.is_empty() {
         pool.closed = true;
+
+        // The safety reserve exists to backstop members' own shortfalls
+        // through the pool's life — once every payout has happened, there's
+        // no more shortfall left to cover, so what's left belongs back to
+        // the members whose penalties/swap fees/skims built it up. Split it
+        // evenly (i128 integer division; any leftover dust from an uneven
+        // split simply stays in reserve_balance — immaterial, and there's
+        // no single "correct" owner of a few leftover units to send it to).
+        let member_count = pool.members.len();
+        if pool.reserve_balance > 0 && member_count > 0 {
+            let per_member = pool.reserve_balance / (member_count as i128);
+            if per_member > 0 {
+                for addr in pool.members.iter() {
+                    token_client.transfer(
+                        &env.current_contract_address(),
+                        &MuxedAddress::from(&addr),
+                        &per_member,
+                    );
+                }
+                pool.reserve_balance -= per_member * (member_count as i128);
+
+                ReserveDistributed {
+                    per_member,
+                    member_count,
+                }
+                .publish(env);
+            }
+        }
+    } else {
+        // Re-draw the remaining queue so each cycle has a fresh random order
+        // among those still waiting for their turn. The previous recipient was
+        // already pop_front()'d above and is no longer in the queue, so they
+        // can't be drawn again.
+        pool.queue = crate::draw::draw_order(env, &pool.queue);
+
+        // Publish the result of the draw so off-chain listeners (bot, indexer)
+        // know who's up next without needing an extra read call.
+        let next_recipient = pool.queue.get_unchecked(0);
+        Drew {
+            next_recipient,
+            cycle: pool.current_cycle,
+        }
+        .publish(env);
     }
     storage::write_pool(env, &pool);
 

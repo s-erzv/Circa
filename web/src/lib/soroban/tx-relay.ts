@@ -60,7 +60,17 @@ export type RelayAction =
       penaltyAmount: string;
       exitPenaltyAmount: string;
       reserveBps: number;
-    };
+    }
+  | {
+      kind: 'pool_request_priority_swap';
+      poolId: string;
+      requester: string;
+      target: string;
+      fee: string; // i128 as string
+    }
+  | { kind: 'pool_accept_priority_swap'; poolId: string; target: string; requester: string }
+  | { kind: 'pool_reject_priority_swap'; poolId: string; target: string }
+  | { kind: 'pool_force_close'; poolId: string; organizer: string };
 
 function i128(value: string): xdr.ScVal {
   return nativeToScVal(BigInt(value), { type: 'i128' });
@@ -107,6 +117,41 @@ function buildInvocation(action: RelayAction): {
           i128(action.exitPenaltyAmount),
           nativeToScVal(action.reserveBps, { type: 'u32' }),
         ],
+        authAddress: action.organizer,
+      };
+    case 'pool_request_priority_swap':
+      return {
+        contractId: action.poolId,
+        method: 'request_priority_swap',
+        args: [
+          new Address(action.requester).toScVal(),
+          new Address(action.target).toScVal(),
+          i128(action.fee),
+        ],
+        authAddress: action.requester,
+      };
+    case 'pool_accept_priority_swap':
+      return {
+        contractId: action.poolId,
+        method: 'accept_priority_swap',
+        args: [
+          new Address(action.target).toScVal(),
+          new Address(action.requester).toScVal(),
+        ],
+        authAddress: action.target,
+      };
+    case 'pool_reject_priority_swap':
+      return {
+        contractId: action.poolId,
+        method: 'reject_priority_swap',
+        args: [new Address(action.target).toScVal()],
+        authAddress: action.target,
+      };
+    case 'pool_force_close':
+      return {
+        contractId: action.poolId,
+        method: 'force_close',
+        args: [new Address(action.organizer).toScVal()],
         authAddress: action.organizer,
       };
   }
@@ -423,7 +468,7 @@ export async function callAsIssuer(
  *  `prepareCreatePool` in `pool.ts`, never from a client-supplied body. */
 export type ClientRelayAction = Extract<
   RelayAction,
-  { kind: 'pool_join' | 'pool_contribute' }
+  { kind: 'pool_join' | 'pool_contribute' | 'pool_request_priority_swap' | 'pool_accept_priority_swap' | 'pool_reject_priority_swap' | 'pool_force_close' }
 >;
 
 /** Only used by API routes to translate a request body into a
@@ -438,6 +483,37 @@ export function assertRelayActionShape(value: unknown): ClientRelayAction {
     (v.kind === 'pool_join' || v.kind === 'pool_contribute') &&
     typeof v.poolId === 'string' &&
     typeof v.member === 'string'
+  ) {
+    return v as ClientRelayAction;
+  }
+  if (
+    v.kind === 'pool_request_priority_swap' &&
+    typeof v.poolId === 'string' &&
+    typeof v.requester === 'string' &&
+    typeof v.target === 'string' &&
+    typeof v.fee === 'string'
+  ) {
+    return v as ClientRelayAction;
+  }
+  if (
+    v.kind === 'pool_accept_priority_swap' &&
+    typeof v.poolId === 'string' &&
+    typeof v.target === 'string' &&
+    typeof v.requester === 'string'
+  ) {
+    return v as ClientRelayAction;
+  }
+  if (
+    v.kind === 'pool_reject_priority_swap' &&
+    typeof v.poolId === 'string' &&
+    typeof v.target === 'string'
+  ) {
+    return v as ClientRelayAction;
+  }
+  if (
+    v.kind === 'pool_force_close' &&
+    typeof v.poolId === 'string' &&
+    typeof v.organizer === 'string'
   ) {
     return v as ClientRelayAction;
   }

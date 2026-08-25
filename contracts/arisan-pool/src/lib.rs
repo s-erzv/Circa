@@ -10,6 +10,7 @@ mod govops;
 mod events;
 mod exit;
 mod swap;
+mod priority;
 mod reputation;
 
 use soroban_sdk::{contract, contractimpl, Address, Env};
@@ -156,6 +157,39 @@ impl ArisanPool {
 
     pub fn accept_swap(env: Env, target: Address, requester: Address) -> Result<(), Error> {
         swap::accept_swap(&env, target, requester)
+    }
+
+    /// Proposes a priority-swap (Piauw): requester offers `fee` tokens to the
+    /// pool reserve in exchange for moving to the target's earlier queue slot.
+    /// Fee is not transferred yet — only on acceptance.
+    pub fn request_priority_swap(
+        env: Env,
+        requester: Address,
+        target: Address,
+        fee: i128,
+    ) -> Result<(), Error> {
+        priority::request_priority_swap(&env, requester, target, fee)
+    }
+
+    /// Target accepts a pending priority-swap request: fee is collected,
+    /// positions are swapped, request is cleared.
+    pub fn accept_priority_swap(
+        env: Env,
+        target: Address,
+        requester: Address,
+    ) -> Result<(), Error> {
+        priority::accept_priority_swap(&env, target, requester)
+    }
+
+    /// Target rejects a pending priority-swap request. No money moves.
+    pub fn reject_priority_swap(env: Env, target: Address) -> Result<(), Error> {
+        priority::reject_priority_swap(&env, target)
+    }
+
+    /// Organizer closes the pool early. Members who haven't yet received their
+    /// payout get a pro-rata share of whatever remains in the pool.
+    pub fn force_close(env: Env, caller: Address) -> Result<(), Error> {
+        exit::force_close(&env, caller)
     }
 
     pub fn list_members(env: Env) -> Result<soroban_sdk::Vec<Address>, Error> {

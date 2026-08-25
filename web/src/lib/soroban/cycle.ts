@@ -41,7 +41,7 @@ export async function runDistribute(poolId: string): Promise<DistributeResult> {
 
   const after = await Promise.all(members.map((addr) => getMember(poolId, addr)));
   const flippedIndex = before.findIndex(
-    (m, i) => !m.received_payout && after[i].received_payout,
+    (m: any, i: number) => !m.received_payout && after[i].received_payout,
   );
 
   return {
@@ -84,3 +84,48 @@ export async function membersOwingThisCycle(poolId: string): Promise<string[]> {
     .filter(({ m }) => !m.exited && !m.contributed_this_cycle)
     .map(({ addr }) => addr);
 }
+
+/** Organizer force-closes the pool. Uses the organizer's own wallet via
+ *  the Mini App relay (passkey required). Exposed here as a relay-prepare
+ *  helper so the Mini App can initiate the signed flow. */
+export async function prepareForceClose(
+  poolId: string,
+  organizer: string,
+): Promise<import('./tx-relay').PreparedRelay> {
+  return prepareRelay({ kind: 'pool_force_close', poolId, organizer });
+}
+
+/** Prepare a priority-swap request (member moving themselves earlier in
+ *  the queue by offering a fee to the pool reserve). */
+export async function prepareRequestPrioritySwap(
+  poolId: string,
+  requester: string,
+  target: string,
+  fee: bigint,
+): Promise<import('./tx-relay').PreparedRelay> {
+  return prepareRelay({
+    kind: 'pool_request_priority_swap',
+    poolId,
+    requester,
+    target,
+    fee: fee.toString(),
+  });
+}
+
+/** Prepare acceptance of a priority-swap request. */
+export async function prepareAcceptPrioritySwap(
+  poolId: string,
+  target: string,
+  requester: string,
+): Promise<import('./tx-relay').PreparedRelay> {
+  return prepareRelay({ kind: 'pool_accept_priority_swap', poolId, target, requester });
+}
+
+/** Prepare rejection of a priority-swap request. */
+export async function prepareRejectPrioritySwap(
+  poolId: string,
+  target: string,
+): Promise<import('./tx-relay').PreparedRelay> {
+  return prepareRelay({ kind: 'pool_reject_priority_swap', poolId, target });
+}
+

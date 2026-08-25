@@ -27,6 +27,23 @@ export async function GET(
 
   const memberStatus = await getMemberStatus(id, user.id);
 
+  let currentCycle = 0;
+  let nextDeadline: number | null = null;
+  let queue: string[] = [];
+  
+  if (pool.contract_id) {
+    try {
+      // Import dynamically or ensure getOnChainPool is available
+      const { getPool: getOnChainPool } = await import('@/lib/soroban/read');
+      const onChain = await getOnChainPool(pool.contract_id);
+      currentCycle = onChain.current_cycle + 1; // 1-indexed for display
+      nextDeadline = Number(onChain.cycle_deadline);
+      queue = onChain.queue;
+    } catch (e) {
+      console.error('Failed to fetch on-chain pool data', e);
+    }
+  }
+
   return NextResponse.json({
     id: pool.id,
     name: pool.name,
@@ -37,5 +54,8 @@ export async function GET(
     cycleLengthSecs: pool.cycle_length_secs,
     isOrganizer: pool.organizer_telegram_id === user.id,
     memberStatus,
+    currentCycle,
+    nextDeadline,
+    queue,
   });
 }

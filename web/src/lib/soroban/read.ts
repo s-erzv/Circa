@@ -94,6 +94,40 @@ export async function getMember(poolId: string, member: string): Promise<OnChain
   return readContract<OnChainMember>(poolId, 'get_member', [new Address(member).toScVal()]);
 }
 
+export async function getPendingPrioritySwap(poolId: string, targetAddress: string) {
+  const { Contract, Address, rpc, xdr, scValToBigInt } = await import('@stellar/stellar-sdk');
+  const contract = new Contract(poolId);
+  const key = xdr.ScVal.scvVec([
+    xdr.ScVal.scvSymbol('PndPriSwap'),
+    new Address(targetAddress).toScVal(),
+  ]);
+
+  const rpcServer = new rpc.Server(RPC_URL);
+  try {
+    const entry = await rpcServer.getContractData(contract, key as any);
+    const map = (entry.val as any).map();
+    if (!map) return null;
+    
+    let requester = '';
+    let fee = '0';
+    
+    for (const item of map) {
+      const sym = item.key().sym().toString();
+      if (sym === 'requester') requester = Address.fromScVal(item.val()).toString();
+      if (sym === 'fee') fee = scValToBigInt(item.val()).toString();
+    }
+    return { requester, fee };
+  } catch (e) {
+    return null;
+  }
+}
+
+
+
+// -----------------------------------------------------------------------------
+// Parsing (ScVal -> JS Objects)
+// -----------------------------------------------------------------------------
+
 /**
  * A SEP-41 token's own `balance` — used for the IDRT held directly in a
  * wallet, separate from whatever's already inside a pool contract. The app

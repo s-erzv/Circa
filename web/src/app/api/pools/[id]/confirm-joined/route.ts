@@ -37,6 +37,25 @@ export async function POST(
 
   await markJoinedOnChain(id, user.id);
 
+  // Confirm membership privately with the actual rules, right at the
+  // moment they take effect for this specific person — the group-wide
+  // summary shown at draft time is easy to have scrolled past by the time
+  // someone actually joins.
+  if (pool.contribution_amount && pool.cycle_length_secs && pool.penalty_amount != null && pool.exit_penalty_amount != null) {
+    const cycleDays = Math.round(pool.cycle_length_secs / 86400);
+    await bot.api
+      .sendMessage(
+        user.id,
+        `Kamu resmi gabung "${pool.name}".\n\n` +
+          `Aturan mainnya:\n` +
+          `• Setoran Rp${pool.contribution_amount.toLocaleString('id-ID')} tiap ${cycleDays} hari\n` +
+          `• Telat lewat batas: kena denda Rp${pool.penalty_amount.toLocaleString('id-ID')}\n` +
+          `• Keluar duluan sebelum kelar: kena potongan Rp${pool.exit_penalty_amount.toLocaleString('id-ID')}\n\n` +
+          `Balik ke grup buat lihat perkembangannya ya.`,
+      )
+      .catch((err) => console.error('failed to DM new-member rules:', err));
+  }
+
   try {
     const activated = await isPoolActivated(pool.contract_id);
     if (activated && pool.status !== 'active') {

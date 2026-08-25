@@ -418,6 +418,64 @@ fn test_distribute_is_permissionless() {
 }
 
 #[test]
+fn test_distribute_splits_leftover_reserve_among_members_on_close() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, organizer, token, asset) = setup_pool_with_token(&env);
+    let gateway = Address::generate(&env);
+
+    // reserve_bps = 500 (5%), unlike create_default_pool's 0 — needed to
+    // actually accumulate something in reserve_balance to distribute.
+    client.create(
+        &organizer, &token, &gateway, &100i128, &2u32, &2_592_000u64, &259_200u64, &10i128,
+        &5i128, &500u32,
+    );
+    let members = join_all(&env, &client, 2);
+    let token_client = TokenClient::new(&env, &token);
+
+    // Cycle 1: ordinary distribute, not the closing one.
+    for m in members.iter() {
+        asset.mint(&m, &1000i128);
+        client.contribute(&m);
+    }
+    env.ledger().set_timestamp(env.ledger().timestamp() + 259_200 + 1);
+    client.distribute();
+    assert_eq!(client.get_pool().reserve_balance, 10, "5% skim of the 200 gross pot");
+
+    // Cycle 2: the closing distribute. Capture balances immediately before
+    // so the assertions below are exact deltas, not confused by the 1000
+    // re-mint each member also receives this round.
+    for m in members.iter() {
+        if !client.get_member(&m).contributed_this_cycle {
+            asset.mint(&m, &1000i128);
+            client.contribute(&m);
+        }
+    }
+    env.ledger().set_timestamp(env.ledger().timestamp() + 259_200 + 1);
+    let m0 = members.get_unchecked(0);
+    let m1 = members.get_unchecked(1);
+    let before0 = token_client.balance(&m0);
+    let before1 = token_client.balance(&m1);
+    client.distribute();
+
+    let pool = client.get_pool();
+    assert!(pool.closed);
+    // Second skim (another 10) brings reserve to 20 before the close-split;
+    // split 2 ways with no remainder leaves reserve_balance at exactly 0.
+    assert_eq!(pool.reserve_balance, 0, "evenly split — no dust left for 20/2");
+
+    // Exactly one member received this cycle's net payout (190) + the 10
+    // reserve share = 200; the other received only their 10 reserve share
+    // (their own payout already happened in cycle 1).
+    let d0 = token_client.balance(&m0) - before0;
+    let d1 = token_client.balance(&m1) - before1;
+    assert!(
+        (d0 == 200 && d1 == 10) || (d0 == 10 && d1 == 200),
+        "one member got payout+reserve (200), the other got just their reserve share (10): {d0}, {d1}"
+    );
+}
+
+#[test]
 fn test_distribute_closes_pool_when_queue_empties() {
     let env = Env::default();
     env.mock_all_auths();

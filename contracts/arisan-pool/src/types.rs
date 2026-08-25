@@ -46,6 +46,9 @@ pub enum DataKey {
     Pool,
     Member(Address),
     PendingSwap(Address),
+    /// Keyed by the target's address — the member being asked to give up their
+    /// earlier slot. Stores who asked and how much they're offering.
+    PendingPrioritySwap(Address),
     Gov,
     Reputation,
 }
@@ -76,4 +79,17 @@ pub enum Error {
     GovNotConfigured = 20,
     NotGov = 21, // Reserved: unauthorized-gov failures currently surface via require_auth's own error, not this variant.
     AlreadyConfigured = 22,
+    NoPendingPrioritySwap = 23,
+    PrioritySwapTargetMismatch = 24,
+    NotOrganizer = 25,
+    CannotSwapSelf = 26,
+    FeeTooLow = 27,
+}
+
+/// Pending priority-swap request stored under `DataKey::PendingPrioritySwap(target)`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrioritySwapRequest {
+    pub requester: Address,
+    pub fee: i128,
 }

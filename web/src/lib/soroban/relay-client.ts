@@ -4,9 +4,7 @@ import { xdr } from '@stellar/stellar-sdk';
 import { apiFetch } from '@/lib/api-client';
 import { signSorobanAuthEntry } from './passkey-auth';
 
-type RelayAction =
-  | { kind: 'pool_join'; poolId: string; member: string }
-  | { kind: 'pool_contribute'; poolId: string; member: string };
+import type { ClientRelayAction } from './tx-relay';
 
 type PreparedRelay = {
   relayId: string;
@@ -26,7 +24,7 @@ type PreparedRelay = {
  * one place rather than being re-implemented per action.
  */
 export async function relayAction(
-  action: RelayAction,
+  action: ClientRelayAction,
   credentialId: string,
 ): Promise<{ hash: string }> {
   const prepared = await apiFetch<PreparedRelay>('/api/tx/prepare', {

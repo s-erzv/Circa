@@ -1,4 +1,4 @@
-use crate::events::Exited;
+use crate::events::{Exited, ForceClosed};
 use crate::storage;
 use crate::types::Error;
 use soroban_sdk::{token, Address, Env, MuxedAddress};
@@ -92,4 +92,68 @@ pub fn perform_removal(env: &Env, member_addr: &Address) -> Result<i128, Error> 
     storage::write_pool(env, &pool);
 
     Ok(refund)
+}
+
+/// Organizer-only emergency close. Distributes whatever remains in the pool
+/// (current cycle's pot plus the reserve) pro-rata to every member who has
+/// not yet received their payout. Members who already got paid are excluded
+/// — their money has already left the contract.
+///
+/// This is a one-shot, irreversible operation: once closed the contract
+/// accepts no further contributions, distributions, or swaps.
+pub fn force_close(env: &Env, caller: Address) -> Result<(), Error> {
+    caller.require_auth();
+
+    let mut pool = storage::read_pool(env)?;
+    if pool.closed {
+        return Err(Error::PoolClosed);
+    }
+    if !pool.activated {
+        return Err(Error::PoolNotActivated);
+    }
+    if caller != pool.organizer {
+        return Err(Error::NotOrganizer);
+    }
+
+    // Collect the addresses eligible for a refund: active members who have
+    // not yet received their payout. Exited members are already gone.
+    let mut eligible: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(env);
+    for addr in pool.members.iter() {
+        let member = storage::read_member(env, &addr)?;
+        if !member.received_payout && !member.exited {
+            eligible.push_back(addr);
+        }
+    }
+
+    let eligible_count = eligible.len();
+    let total_distributable = pool.cycle_pot + pool.reserve_balance;
+
+    let refund_per_member = if eligible_count > 0 && total_distributable > 0 {
+        total_distributable / (eligible_count as i128)
+    } else {
+        0
+    };
+
+    if refund_per_member > 0 {
+        let token_client = token::Client::new(env, &pool.token);
+        for addr in eligible.iter() {
+            token_client.transfer(
+                &env.current_contract_address(),
+                &MuxedAddress::from(&addr),
+                &refund_per_member,
+            );
+        }
+    }
+
+    pool.closed = true;
+    pool.cycle_pot = 0;
+    pool.reserve_balance = 0;
+    storage::write_pool(env, &pool);
+
+    ForceClosed {
+        refund_per_member,
+        eligible_count,
+    }
+    .publish(env);
+    Ok(())
 }

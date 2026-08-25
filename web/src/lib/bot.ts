@@ -7,7 +7,7 @@ import {
   listInterestedCount,
   markInterested,
 } from './pools';
-import { getMember, getPool, getTokenBalance, listPoolMembers } from './soroban/read';
+import { getMember, getPool, getTokenBalance, listPoolMembers, getPoolQueue } from './soroban/read';
 import OpenAI from 'openai';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -20,6 +20,15 @@ export const bot = new Bot(token || 'dummy:token');
 
 const webAppUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'circagram_bot';
+
+// Penalty/exit-penalty/reserve stay fixed small fractions of the
+// contribution rather than another interview question — these are
+// recovery-mechanism tuning, not something a first-time organizer has an
+// informed opinion on yet. Shared here so the confirmation summary can show
+// them and draftok's actual pool creation can't drift from what was shown.
+const PENALTY_RATE = 0.05;
+const EXIT_PENALTY_RATE = 0.025;
+const RESERVE_BPS = 100;
 
 /**
  * A one-tap button that opens the Mini App *inside* Telegram.
@@ -107,6 +116,11 @@ bot.command('start', async (ctx) => {
       join: { label: 'Gabung Resmi', path: `/app/pool/${poolId}/join` },
       setor: { label: 'Setor Sekarang', path: `/app/pool/${poolId}/setor` },
       jadwal: { label: 'Lihat Jadwal', path: `/app/pool/${poolId}/jadwal` },
+      cair: { label: 'Cair Sekarang 💸', path: `/app/pool/${poolId}/cair` },
+      tutup: { label: 'Tutup Arisan', path: `/app/pool/${poolId}/tutup` },
+      pswap: { label: 'Minta Giliran Lebih Awal', path: `/app/pool/${poolId}/priority-swap` },
+      apswap: { label: 'Setujui Permintaan Tukar', path: `/app/pool/${poolId}/accept-priority-swap` },
+      rpswap: { label: 'Tolak Permintaan Tukar', path: `/app/pool/${poolId}/reject-priority-swap` },
     };
     const route = poolId ? routes[kind] : undefined;
     if (route) {
@@ -483,7 +497,7 @@ bot.command('saldopool', async (ctx) => {
     const memberStates = await Promise.all(
       members.map((address) => getMember(pool.contract_id as string, address)),
     );
-    const paidThisCycle = memberStates.filter((m) => m.contributed_this_cycle).length;
+    const paidThisCycle = memberStates.filter((m: any) => m.contributed_this_cycle).length;
 
     await ctx.reply(
       `Saldo "${pool.name}":\n` +
@@ -534,12 +548,18 @@ async function showConfirmSummary(
   draftStates.set(key, next);
 
   const schedule = projectScheduleDates(next.memberCount, next.cycleLengthSecs).join('\n');
+  const penaltyAmount = Math.round(next.contributionAmount * PENALTY_RATE);
+  const exitPenaltyAmount = Math.round(next.contributionAmount * EXIT_PENALTY_RATE);
 
   await ctx.reply(
     `Ringkasan "${next.name}":\n` +
       `• ${next.memberCount} anggota\n` +
       `• Setoran Rp${next.contributionAmount.toLocaleString('id-ID')} / siklus\n` +
       `• Tiap ${cycleDays} hari, batas kumpul ${deadlineDays} hari sebelum telat\n\n` +
+      `Aturan mainnya:\n` +
+      `• Telat setor lewat batas: kena denda Rp${penaltyAmount.toLocaleString('id-ID')}, masuk kas cadangan\n` +
+      `• Keluar duluan sebelum kelar: kena potongan Rp${exitPenaltyAmount.toLocaleString('id-ID')}\n` +
+      `• Kas cadangan (${RESERVE_BPS / 100}% dari tiap pencairan) nutupin kalau ada yang nunggak, sisanya dibagi rata pas arisan kelar\n\n` +
       `Proyeksi jadwal (siapa dapet giliran baru ketauan pas kocokan — ini baru perkiraan tanggalnya):\n${schedule}\n\n` +
       `Testnet: token uji, belum Rupiah beneran.\n\nUdah pas?`,
     {
@@ -652,10 +672,6 @@ bot.callbackQuery('draftok', async (ctx) => {
     return;
   }
 
-  // Penalty/exit-penalty/reserve stay fixed small fractions of the
-  // contribution rather than another interview question — these are
-  // recovery-mechanism tuning, not something a first-time organizer has an
-  // informed opinion on yet.
   let pool;
   try {
     pool = await createDraftPool(user.id, telegramId, chatId, {
@@ -664,9 +680,9 @@ bot.callbackQuery('draftok', async (ctx) => {
       contributionAmount: state.contributionAmount,
       cycleLengthSecs: state.cycleLengthSecs,
       deadlineOffsetSecs: state.deadlineOffsetSecs,
-      penaltyAmount: Math.round(state.contributionAmount * 0.05),
-      exitPenaltyAmount: Math.round(state.contributionAmount * 0.025),
-      reserveBps: 100,
+      penaltyAmount: Math.round(state.contributionAmount * PENALTY_RATE),
+      exitPenaltyAmount: Math.round(state.contributionAmount * EXIT_PENALTY_RATE),
+      reserveBps: RESERVE_BPS,
     });
   } catch (error) {
     console.error('createDraftPool failed:', error);
@@ -738,10 +754,13 @@ async function handleGeneralMessage(ctx: {
         {
           role: 'system',
           content:
-            'Kamu adalah Circa, asisten Telegram Arisan berbasis blockchain yang ramah dan gaul. ' +
+            'Kamu adalah Circa, asisten arisan on-chain yang ramah dan gaul. ' +
             'Gunakan bahasa Indonesia santai (aku/kamu atau gue/lu). ' +
             'Kalau user mau bikin arisan baru, arahkan mereka ketik /mulai di grup arisannya — ' +
-            'jangan pernah membuat arisan sendiri dari percakapan biasa.',
+            'jangan pernah membuat arisan sendiri dari percakapan biasa. ' +
+            'Fitur tersedia: /mulai (bikin arisan baru), /saldopool (cek kas), /tutup (organizer nutup arisan di tengah). ' +
+            'Anggota bisa minta tukar giliran lebih awal (Piauw) lewat Mini App dengan menawarkan kompensasi ke kas cadangan. ' +
+            'Dana arisan aman di kontrak blockchain — tidak dipegang satu orang pun.',
         },
         { role: 'user', content: userMessage },
       ],
@@ -804,6 +823,59 @@ bot.callbackQuery(/^gabung:(.+)$/, async (ctx) => {
         `bakal diminta FaceID/sidik jari sekali buat tanda tangan.`,
       { reply_markup: deepLinkKeyboard('Gabung Resmi', `join_${poolId}`) },
     );
+  }
+});
+
+/**
+ * `/tutup` — organizer closes the pool early. Prompts a confirmation message
+ * with refund estimates before opening the Mini App to execute.
+ */
+bot.command('tutup', async (ctx) => {
+  const telegramId = ctx.from?.id.toString();
+  const chatId = ctx.chat.id.toString();
+  if (!telegramId) return;
+  if (ctx.chat.type === 'private') {
+    await ctx.reply('Ketik /tutup di grup arisan ya.');
+    return;
+  }
+
+  const pool = await getLivePoolForChat(chatId);
+  if (!pool || !pool.contract_id) {
+    await ctx.reply('Belum ada arisan yang aktif di grup ini.');
+    return;
+  }
+
+  // Only organizer can force-close.
+  if (pool.organizer_telegram_id !== telegramId) {
+    await ctx.reply('Hanya pembuat arisan yang bisa menutup arisan ini.');
+    return;
+  }
+
+  try {
+    const onChain = await getPool(pool.contract_id);
+    const members = await listPoolMembers(pool.contract_id);
+    const memberStates = await Promise.all(
+      members.map((addr) => getMember(pool.contract_id as string, addr)),
+    );
+    const alreadyPaid = memberStates.filter((m: any) => m.received_payout).length;
+    const eligible = memberStates.filter((m: any) => !m.received_payout && !m.exited).length;
+    const totalRemaining = Number(onChain.cycle_pot) + Number(onChain.reserve_balance);
+    const refundPerPerson = eligible > 0 ? Math.floor(totalRemaining / eligible) : 0;
+
+    const fmt = new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+
+    await ctx.reply(
+      `⚠️ Mau nutup arisan "${pool.name}" sekarang?\n\n` +
+        `Status:\n` +
+        `• Siklus ke-${onChain.current_cycle + 1} (sudah ${alreadyPaid} dari ${members.length} orang dapat)\n` +
+        `• Kas tersisa: Rp${totalRemaining.toLocaleString('id-ID')}\n` +
+        `• Perkiraan refund: Rp${refundPerPerson.toLocaleString('id-ID')}/orang untuk ${eligible} orang belum dapat\n\n` +
+        `Ini tidak bisa dibatalkan — semua uang yang tersisa langsung dibagi.`,
+      { reply_markup: deepLinkKeyboard('Konfirmasi Tutup ⚠️', `tutup_${pool.id}`) },
+    );
+  } catch (err) {
+    console.error('failed to fetch pool state for /tutup:', err);
+    await ctx.reply('Gagal ngambil data pool. Coba lagi bentar ya.');
   }
 });
 

@@ -47,9 +47,15 @@ export async function POST(request: Request) {
         { status: 409 },
       );
     }
-    if (data.wallet_address !== action.member) {
+    let actionAuthAddress: string | null = null;
+    if ('member' in action) actionAuthAddress = action.member;
+    else if ('requester' in action && action.kind !== 'pool_accept_priority_swap') actionAuthAddress = action.requester;
+    else if ('target' in action) actionAuthAddress = action.target;
+    else if ('organizer' in action) actionAuthAddress = action.organizer;
+
+    if (!actionAuthAddress || data.wallet_address !== actionAuthAddress) {
       return NextResponse.json(
-        { error: 'Alamat member tidak cocok dengan dompetmu.' },
+        { error: 'Alamat dompet tidak sesuai dengan permintaan transaksi.' },
         { status: 403 },
       );
     }

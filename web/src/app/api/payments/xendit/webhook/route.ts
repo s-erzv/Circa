@@ -5,7 +5,7 @@ import { mintIdrt } from '@/lib/payments/mint';
 import { runContributeViaGateway } from '@/lib/soroban/cycle';
 import { getPool as getOnChainPool } from '@/lib/soroban/read';
 import { getPool as getPoolRow } from '@/lib/pools';
-import { bot } from '@/lib/bot';
+import { bot, deepLinkKeyboard } from '@/lib/bot';
 
 /**
  * Where a real QRIS payment turns into an on-chain credit.
@@ -114,13 +114,84 @@ export async function POST(request: Request) {
         const label = userRow?.telegram_username ? `@${userRow.telegram_username}` : 'Seseorang';
         const target = (pool.contribution_amount ?? 0) * (pool.member_count ?? 0);
 
+        // current_cycle di kontrak adalah 0-indexed internal counter;
+        // tampilkan sebagai 1-indexed supaya manusia nggak bingung.
+        const cycleDisplay = onChain.current_cycle + 1;
+
         await bot.api
           .sendMessage(
             pool.telegram_chat_id,
-            `${label} udah setor buat siklus ke-${onChain.current_cycle}.\n` +
+            `${label} udah setor buat siklus ke-${cycleDisplay}.\n` +
               `Terkumpul: Rp${onChain.cycle_pot.toLocaleString('id-ID')} / Rp${target.toLocaleString('id-ID')}`,
           )
           .catch((err) => console.error('failed to announce gateway contribution:', err));
+
+        // Semua anggota sudah setor siklus ini — umumkan ke grup siapa
+        // yang dapat giliran, kapan bisa cair, dan tanya penerimanya
+        // apakah mau cair sekarang (trigger distribute sebelum deadline)
+        // atau tunggu sampai deadline otomatis.
+        const potFilled = Number(onChain.cycle_pot) >= target && target > 0;
+        if (potFilled) {
+          const recipientWallet = onChain.queue[0] ?? null;
+          let recipientLabel = 'Penerima giliran';
+          let recipientTelegramId: string | null = null;
+          if (recipientWallet) {
+            const { data: recipientRow } = await supabase
+              .from('users')
+              .select('telegram_username, telegram_id')
+              .eq('wallet_address', recipientWallet)
+              .maybeSingle();
+            if (recipientRow?.telegram_username) {
+              recipientLabel = `@${recipientRow.telegram_username}`;
+            }
+            recipientTelegramId = recipientRow?.telegram_id ?? null;
+          }
+
+          // cycle_deadline = batas setor, tapi distribute() bisa dipanggil
+          // lebih awal kalau semua udah setor. Formatnya jadi info "bisa
+          // cair sekarang" bukan "cair pas deadline".
+          const fmt = new Intl.DateTimeFormat('id-ID', {
+            day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
+            timeZone: 'Asia/Jakarta',
+          });
+          const deadlineDate = fmt.format(new Date(Number(onChain.cycle_deadline) * 1000));
+
+          const nextCycleDays = pool.cycle_length_secs
+            ? Math.round(pool.cycle_length_secs / 86400)
+            : null;
+          const nextCycleInfo = nextCycleDays
+            ? `Siklus ke-${cycleDisplay + 1} mulai dalam ${nextCycleDays} hari.`
+            : '';
+
+          // Kirim pengumuman di grup
+          await bot.api
+            .sendMessage(
+              pool.telegram_chat_id,
+              `✅ Semua udah setor! Pool siklus ke-${cycleDisplay} penuh — Rp${target.toLocaleString('id-ID')} siap dicairkan.\n\n` +
+                `💸 Giliran siklus ke-${cycleDisplay}: ${recipientLabel}\n\n` +
+                `Dana bisa dicairkan sekarang atau paling lambat otomatis cair sebelum ${deadlineDate} WIB.` +
+                (nextCycleInfo ? `\n\n🗓 ${nextCycleInfo} Yuk siap-siap setor lagi!` : ''),
+            )
+            .catch((err) => console.error('failed to announce pool full:', err));
+
+          // DM ke penerima: tanya mau cair sekarang atau tunggu
+          if (recipientTelegramId) {
+            await bot.api
+              .sendMessage(
+                recipientTelegramId,
+                `🎉 Giliran kamu dapat di arisan "${pool.name}" siklus ke-${cycleDisplay}!\n\n` +
+                  `Pool udah terkumpul penuh Rp${target.toLocaleString('id-ID')}.\n` +
+                  `Mau cair sekarang atau tunggu sampai deadline (${deadlineDate} WIB)?`,
+                {
+                  reply_markup: deepLinkKeyboard(
+                    'Cair Sekarang 💸',
+                    `cair_${claimed.pool_id}`,
+                  ),
+                },
+              )
+              .catch((err) => console.error('failed to DM recipient:', err));
+          }
+        }
       }
     } else {
       await mintIdrt(claimed.wallet_address, claimed.amount);
